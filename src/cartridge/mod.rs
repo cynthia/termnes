@@ -3,7 +3,7 @@ pub mod mapper;
 use std::fs;
 
 use crate::ppu::Mirroring;
-use mapper::{Mapper, NromMapper, UnromMapper};
+use mapper::{Mapper, Mmc1Mapper, NromMapper, UnromMapper};
 
 pub struct Cartridge {
     pub prg_rom: Vec<u8>,
@@ -63,8 +63,9 @@ impl Cartridge {
         let chr_rom = data[prg_end..chr_end].to_vec();
 
         let mapper: Box<dyn Mapper> = match mapper_id {
-            0 => Box::new(NromMapper::new(prg_rom.clone(), chr_rom.clone())),
-            2 => Box::new(UnromMapper::new(prg_rom.clone())),
+            0 => Box::new(NromMapper::new(prg_rom.clone(), chr_rom.clone(), mirroring)),
+            1 => Box::new(Mmc1Mapper::new(prg_rom.clone(), chr_rom.clone())),
+            2 => Box::new(UnromMapper::new(prg_rom.clone(), mirroring)),
             _ => return Err(format!("Unsupported mapper: {}", mapper_id)),
         };
 
@@ -100,6 +101,10 @@ impl Cartridge {
     /// Writes to the CHR address space (only meaningful for CHR-RAM).
     pub fn chr_write(&mut self, addr: u16, val: u8) {
         self.mapper.chr_write(addr, val);
+    }
+
+    pub fn mirroring(&self) -> Mirroring {
+        self.mapper.mirroring()
     }
 }
 

@@ -7,6 +7,8 @@ use crate::cartridge::Cartridge;
 pub enum Mirroring {
     Horizontal,
     Vertical,
+    OneScreenLow,
+    OneScreenHigh,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -107,7 +109,7 @@ impl Ppu {
         match addr {
             0x0000..=0x1FFF => cartridge.chr_read(addr),
             0x2000..=0x3EFF => {
-                let mirrored = self.mirror_nametable(addr);
+                let mirrored = self.mirror_nametable(addr, cartridge);
                 self.vram[mirrored]
             }
             0x3F00..=0x3FFF => {
@@ -128,7 +130,7 @@ impl Ppu {
         match addr {
             0x0000..=0x1FFF => cartridge.chr_write(addr, val),
             0x2000..=0x3EFF => {
-                let mirrored = self.mirror_nametable(addr);
+                let mirrored = self.mirror_nametable(addr, cartridge);
                 self.vram[mirrored] = val;
             }
             0x3F00..=0x3FFF => {
@@ -144,13 +146,15 @@ impl Ppu {
 
     /// Maps a nametable address ($2000-$3EFF) to a VRAM index using the
     /// cartridge mirroring mode. Returns index into `self.vram`.
-    fn mirror_nametable(&self, addr: u16) -> usize {
+    fn mirror_nametable(&self, addr: u16, cartridge: &Cartridge) -> usize {
         let addr = (addr - 0x2000) & 0x0FFF;
         let table = (addr / 0x0400) as usize; // 0-3
         let offset = (addr % 0x0400) as usize;
-        let mapped = match self.mirroring {
+        let mapped = match cartridge.mirroring() {
             Mirroring::Horizontal => [0, 0, 1, 1][table],
             Mirroring::Vertical   => [0, 1, 0, 1][table],
+            Mirroring::OneScreenLow => [0, 0, 0, 0][table],
+            Mirroring::OneScreenHigh => [1, 1, 1, 1][table],
         };
         mapped * 0x0400 + offset
     }
@@ -317,39 +321,54 @@ mod tests {
     #[test]
     fn horizontal_mirroring() {
         let ppu = Ppu::new(Mirroring::Horizontal);
+        let cart = make_cart();
         // NT0 ($2000) and NT1 ($2400) share physical bank 0
-        assert_eq!(ppu.mirror_nametable(0x2000), ppu.mirror_nametable(0x2400));
+        assert_eq!(ppu.mirror_nametable(0x2000, &cart), ppu.mirror_nametable(0x2400, &cart));
         // NT2 ($2800) and NT3 ($2C00) share physical bank 1
-        assert_eq!(ppu.mirror_nametable(0x2800), ppu.mirror_nametable(0x2C00));
+        assert_eq!(ppu.mirror_nametable(0x2800, &cart), ppu.mirror_nametable(0x2C00, &cart));
         // NT0 and NT2 are different physical banks
-        assert_ne!(ppu.mirror_nametable(0x2000), ppu.mirror_nametable(0x2800));
+        assert_ne!(ppu.mirror_nametable(0x2000, &cart), ppu.mirror_nametable(0x2800, &cart));
     }
 
     #[test]
     fn vertical_mirroring() {
+        let mut cart = make_cart();
+        // Set cart mirroring to vertical
+        let mut rom = Vec::new();
+        rom.extend_from_slice(b"NES\x1A");
+        rom.push(1); rom.push(1);
+        rom.push(0x01); // Vertical
+        rom.push(0x00);
+        rom.extend_from_slice(&[0u8; 8]);
+        rom.extend(vec![0u8; 0x4000]);
+        rom.extend(vec![0u8; 0x2000]);
+        cart = Cartridge::from_ines(&rom).unwrap();
+
         let ppu = Ppu::new(Mirroring::Vertical);
         // NT0 ($2000) and NT2 ($2800) share physical bank 0
-        assert_eq!(ppu.mirror_nametable(0x2000), ppu.mirror_nametable(0x2800));
+        assert_eq!(ppu.mirror_nametable(0x2000, &cart), ppu.mirror_nametable(0x2800, &cart));
         // NT1 ($2400) and NT3 ($2C00) share physical bank 1
-        assert_eq!(ppu.mirror_nametable(0x2400), ppu.mirror_nametable(0x2C00));
+        assert_eq!(ppu.mirror_nametable(0x2400, &cart), ppu.mirror_nametable(0x2C00, &cart));
         // NT0 and NT1 are different physical banks
-        assert_ne!(ppu.mirror_nametable(0x2000), ppu.mirror_nametable(0x2400));
+        assert_ne!(ppu.mirror_nametable(0x2000, &cart), ppu.mirror_nametable(0x2400, &cart));
     }
 
     #[test]
     fn nametable_offset_preserved() {
         let ppu = Ppu::new(Mirroring::Horizontal);
-        let base = ppu.mirror_nametable(0x2000);
-        assert_eq!(ppu.mirror_nametable(0x23FF), base + 0x3FF);
+        let cart = make_cart();
+        let base = ppu.mirror_nametable(0x2000, &cart);
+        assert_eq!(ppu.mirror_nametable(0x23FF, &cart), base + 0x3FF);
     }
 
     #[test]
     fn mirror_range_3000_maps_to_2000() {
         let ppu = Ppu::new(Mirroring::Vertical);
+        let cart = make_cart();
         // $3000 should map the same as $2000 (it's in $3000-$3EFF mirror range)
         // ppu_read masks with 0x2FFF before calling mirror_nametable
-        assert_eq!(ppu.mirror_nametable(0x3000 & 0x2FFF), ppu.mirror_nametable(0x2000));
-        assert_eq!(ppu.mirror_nametable(0x3400 & 0x2FFF), ppu.mirror_nametable(0x2400));
+        assert_eq!(ppu.mirror_nametable(0x3000 & 0x2FFF, &cart), ppu.mirror_nametable(0x2000, &cart));
+        assert_eq!(ppu.mirror_nametable(0x3400 & 0x2FFF, &cart), ppu.mirror_nametable(0x2400, &cart));
     }
 
     // ── Palette mirroring ─────────────────────────────────────────────────────
