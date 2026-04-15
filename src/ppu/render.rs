@@ -27,7 +27,7 @@ struct SpriteRow {
 
 impl Ppu {
     /// Advance the PPU by one cycle. Called 3× per CPU cycle.
-    pub fn tick(&mut self, cartridge: &Cartridge) {
+    pub fn tick(&mut self, cartridge: &mut Cartridge) {
         // ── Flag management at specific dots ────────────────────────────────
         if self.scanline == VBLANK_SCANLINE as i16 && self.cycle == 1 {
             self.status |= 0x80; // set VBlank
@@ -38,6 +38,14 @@ impl Ppu {
         if self.scanline == -1 && self.cycle == 1 {
             // Pre-render: clear VBlank, sprite-0 hit, sprite overflow
             self.status &= !0xE0;
+        }
+
+        // ── MMC3 IRQ counter ─────────────────────────────────────────────────
+        // MMC3 ticks its IRQ counter on PPU A12 transition (0 -> 1).
+        // This usually happens at dot 260 of every visible scanline when BG
+        // uses pattern table 0 ($0000) and sprites use pattern table 1 ($1000).
+        if self.cycle == 260 && (self.scanline >= 0 && self.scanline < 240 || self.scanline == -1) && (self.mask & 0x18 != 0) {
+             cartridge.tick_scanline();
         }
 
         // ── Advance cycle / scanline ─────────────────────────────────────────

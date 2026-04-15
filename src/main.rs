@@ -103,7 +103,7 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer) {
                 // Tick both PPU and APU during DMA (CPU is halted, but PPU/APU continue)
                 for _ in 0..dma_cycles as u32 {
                     for _ in 0..3 {
-                        cpu.bus.ppu.tick(&cpu.bus.cartridge);
+                        cpu.bus.ppu.tick(&mut cpu.bus.cartridge);
                     }
                     cpu.bus.apu.tick(1);
                 }
@@ -186,7 +186,7 @@ fn run_trace(cpu: &mut Cpu, log_path: &str) {
             if dma_cycles > 0 {
                 for _ in 0..dma_cycles as u32 {
                     for _ in 0..3 {
-                        cpu.bus.ppu.tick(&cpu.bus.cartridge);
+                        cpu.bus.ppu.tick(&mut cpu.bus.cartridge);
                     }
                     cpu.bus.apu.tick(1);
                 }

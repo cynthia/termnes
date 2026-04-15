@@ -3,7 +3,7 @@ pub mod mapper;
 use std::fs;
 
 use crate::ppu::Mirroring;
-use mapper::{Mapper, Mmc1Mapper, Mmc2Mapper, NromMapper, UnromMapper};
+use mapper::{Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, NromMapper, UnromMapper};
 
 pub struct Cartridge {
     pub prg_rom: Vec<u8>,
@@ -66,6 +66,7 @@ impl Cartridge {
             0 => Box::new(NromMapper::new(prg_rom.clone(), chr_rom.clone(), mirroring)),
             1 => Box::new(Mmc1Mapper::new(prg_rom.clone(), chr_rom.clone())),
             2 => Box::new(UnromMapper::new(prg_rom.clone(), mirroring)),
+            4 => Box::new(Mmc3Mapper::new(prg_rom.clone(), chr_rom.clone())),
             9 => Box::new(Mmc2Mapper::new(prg_rom.clone(), chr_rom.clone())),
             _ => return Err(format!("Unsupported mapper: {}", mapper_id)),
         };
@@ -106,6 +107,14 @@ impl Cartridge {
 
     pub fn mirroring(&self) -> Mirroring {
         self.mapper.mirroring()
+    }
+
+    pub fn tick_scanline(&mut self) {
+        self.mapper.tick_scanline();
+    }
+
+    pub fn check_irq(&self) -> bool {
+        self.mapper.check_irq()
     }
 }
 

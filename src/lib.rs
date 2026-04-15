@@ -38,7 +38,7 @@ impl Nes {
             if dma_cycles > 0 {
                 for _ in 0..dma_cycles as u32 {
                     for _ in 0..3 {
-                        self.cpu.bus.ppu.tick(&self.cpu.bus.cartridge);
+                        self.cpu.bus.ppu.tick(&mut self.cpu.bus.cartridge);
                     }
                     self.cpu.bus.apu.tick(1);
                 }

@@ -102,7 +102,7 @@ impl Bus {
     /// Advances the PPU by 3 cycles for each CPU cycle and clocks the APU frame counter.
     pub fn tick(&mut self, cpu_cycles: u8) {
         for _ in 0..(cpu_cycles as usize * 3) {
-            self.ppu.tick(&self.cartridge);
+            self.ppu.tick(&mut self.cartridge);
         }
         self.apu.tick(cpu_cycles);
         self.total_cycles = self.total_cycles.wrapping_add(cpu_cycles as usize);
@@ -155,6 +155,6 @@ impl Bus {
 
     /// Returns true if the APU IRQ line is currently asserted.
     pub fn poll_irq(&self) -> bool {
-        self.apu.frame_interrupt
+        self.apu.frame_interrupt || self.cartridge.check_irq()
     }
 }
