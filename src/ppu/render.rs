@@ -27,6 +27,7 @@ struct SpriteRow {
 
 impl Ppu {
     /// Advance the PPU by one cycle. Called 3× per CPU cycle.
+    /// Advance the PPU by one cycle. Called 3× per CPU cycle.
     pub fn tick(&mut self, cartridge: &mut Cartridge) {
         // ── Flag management at specific dots ────────────────────────────────
         if self.scanline == VBLANK_SCANLINE as i16 && self.cycle == 1 {
@@ -36,27 +37,24 @@ impl Ppu {
             }
         }
         if self.scanline == -1 && self.cycle == 1 {
+
+
+
             // Pre-render: clear VBlank, sprite-0 hit, sprite overflow
             self.status &= !0xE0;
         }
 
         // ── MMC3 IRQ counter ─────────────────────────────────────────────────
-        // MMC3 ticks its IRQ counter on PPU A12 transition (0 -> 1).
-        // This usually happens at dot 260 of every visible scanline when BG
-        // uses pattern table 0 ($0000) and sprites use pattern table 1 ($1000).
         if self.cycle == 260 && (self.scanline >= 0 && self.scanline < 240 || self.scanline == -1) && (self.mask & 0x18 != 0) {
              cartridge.tick_scanline();
         }
 
         // ── Advance cycle / scanline ─────────────────────────────────────────
-        self.cycle += 1;
-
         let rendering = (self.mask & 0x18) != 0;
         let visible = self.scanline >= 0 && self.scanline < SCREEN_HEIGHT as i16;
         let pre_render = self.scanline == -1;
 
-        // Render at dot 256 using the start-of-scanline `v` snapshot. Sprite-0
-        // hit is surfaced here so the CPU can see it before the scanline ends.
+        // Render at dot 256 using the start-of-scanline `v` snapshot.
         if self.cycle == 256 {
             if visible {
                 self.render_scanline(self.scanline, cartridge);
@@ -72,23 +70,30 @@ impl Ppu {
         }
 
         // Pre-render only: dots 280-304 copy vertical scroll bits t -> v
-        // (coarse Y + fine Y + NT Y).
         if pre_render && rendering && self.cycle >= 280 && self.cycle <= 304 {
             self.vram_addr = (self.vram_addr & !0x7BE0) | (self.temp_vram_addr & 0x7BE0);
         }
+
+        self.cycle += 1;
 
         if self.cycle >= CYCLES_PER_SCANLINE as u16 {
             self.cycle = 0;
             self.scanline += 1;
 
-            // 262 scanlines per frame: pre-render (-1), visible (0-239),
-            // post-render (240), VBlank (241-260). Wrap after scanline 260.
             if self.scanline >= (SCANLINES_PER_FRAME - 1) as i16 {
                 self.scanline = -1;
                 self.frame_complete = true;
+                self.odd_frame = !self.odd_frame;
             }
         }
+
+        // Odd frame skip: skip cycle 340 of scanline -1 if rendering is enabled.
+        if self.odd_frame && self.scanline == -1 && self.cycle == 340 && rendering {
+            self.cycle = 0;
+            self.scanline = 0;
+        }
     }
+
 
     /// Increment the coarse-Y component of `v`, advancing fine Y first and
     /// wrapping coarse Y at 29 (toggles vertical nametable bit) / 31 (no toggle).

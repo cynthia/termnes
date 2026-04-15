@@ -73,7 +73,7 @@ fn four_step_mode_generates_irq() {
     let mut apu = Apu::new();
 
     // Write $00 to $4017: 4-step mode, IRQ enabled.
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     let irq = tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES, 1);
     assert!(irq, "4-step mode should generate an IRQ within one frame sequence");
@@ -82,7 +82,7 @@ fn four_step_mode_generates_irq() {
 #[test]
 fn four_step_mode_sets_status_bit6() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES, 1);
 
@@ -96,7 +96,7 @@ fn four_step_mode_sets_status_bit6() {
 #[test]
 fn four_step_irq_fires_near_expected_cycle() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     let cycle = find_irq_cycle(&mut apu, 30_000)
         .expect("IRQ should fire within 30 000 cycles");
@@ -117,7 +117,7 @@ fn irq_inhibit_prevents_irq() {
     let mut apu = Apu::new();
 
     // $40 = bit 6 set → IRQ inhibit, 4-step mode.
-    apu.write_frame_counter(0x40);
+    apu.write_frame_counter(0x40, 0);
 
     let irq = tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES * 2, 1);
     assert!(
@@ -129,7 +129,7 @@ fn irq_inhibit_prevents_irq() {
 #[test]
 fn irq_inhibit_keeps_status_clear() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x40);
+    apu.write_frame_counter(0x40, 0);
 
     tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES * 2, 1);
 
@@ -149,7 +149,7 @@ fn five_step_mode_no_irq() {
     let mut apu = Apu::new();
 
     // $80 = bit 7 set → 5-step mode (IRQ enable is irrelevant in this mode).
-    apu.write_frame_counter(0x80);
+    apu.write_frame_counter(0x80, 0);
 
     let irq = tick_for(&mut apu, FIVE_STEP_FRAME_CYCLES * 2, 1);
     assert!(
@@ -161,7 +161,7 @@ fn five_step_mode_no_irq() {
 #[test]
 fn five_step_mode_status_bit6_stays_clear() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x80);
+    apu.write_frame_counter(0x80, 0);
 
     tick_for(&mut apu, FIVE_STEP_FRAME_CYCLES * 2, 1);
 
@@ -178,7 +178,7 @@ fn five_step_mode_status_bit6_stays_clear() {
 #[test]
 fn read_status_clears_frame_interrupt() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Drive to an IRQ.
     tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES, 1);
@@ -193,7 +193,7 @@ fn read_status_clears_frame_interrupt() {
 #[test]
 fn read_status_clears_only_frame_interrupt() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES, 1);
 
@@ -216,7 +216,7 @@ fn read_status_clears_only_frame_interrupt() {
 #[test]
 fn write_frame_counter_resets_cycle_counter() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Advance most of the way through a frame (but not quite).
     let partial = FOUR_STEP_FRAME_CYCLES - 1000;
@@ -224,7 +224,7 @@ fn write_frame_counter_resets_cycle_counter() {
     assert!(!irq, "IRQ should not have fired yet");
 
     // Re-write $4017 — this should reset the sequencer.
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Tick another 1000 cycles — without the reset we would have crossed the
     // threshold, but with the reset we're back near the start.
@@ -238,13 +238,13 @@ fn write_frame_counter_resets_cycle_counter() {
 #[test]
 fn write_frame_counter_mid_sequence_allows_full_new_frame() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Advance partway.
     tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES / 2, 1);
 
     // Reset.
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Now a full frame from the reset point should trigger the IRQ.
     let irq = tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES, 1);
@@ -258,7 +258,7 @@ fn write_frame_counter_mid_sequence_allows_full_new_frame() {
 #[test]
 fn irq_fires_on_successive_frames() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     for frame in 1..=3 {
         // Clear any pending flag so we can detect the *new* IRQ.
@@ -282,7 +282,7 @@ fn irq_fires_on_successive_frames() {
 fn irq_fires_with_multi_cycle_ticks() {
     // Ensure the implementation handles tick(n) where n > 1 correctly.
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Use larger tick steps (as a real CPU would — instructions are 2-7 cycles).
     let irq = tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES, 4);
@@ -298,12 +298,12 @@ fn switching_from_five_step_to_four_step_enables_irq() {
     let mut apu = Apu::new();
 
     // Start in 5-step mode (no IRQs).
-    apu.write_frame_counter(0x80);
+    apu.write_frame_counter(0x80, 0);
     tick_for(&mut apu, FIVE_STEP_FRAME_CYCLES, 1);
     assert!(!tick_for(&mut apu, 1, 1), "sanity: no IRQ in 5-step mode");
 
     // Switch to 4-step mode.
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
     let irq = tick_for(&mut apu, FOUR_STEP_FRAME_CYCLES, 1);
     assert!(irq, "IRQ should fire after switching to 4-step mode");
 }
@@ -311,14 +311,14 @@ fn switching_from_five_step_to_four_step_enables_irq() {
 #[test]
 fn enabling_inhibit_mid_frame_suppresses_pending_irq() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Advance close to (but not past) the IRQ point.
     let partial = FOUR_STEP_FRAME_CYCLES - 500;
     tick_for(&mut apu, partial, 1);
 
     // Now set inhibit — should also clear any pending frame interrupt flag.
-    apu.write_frame_counter(0x40);
+    apu.write_frame_counter(0x40, 0);
 
     // Tick past where the old IRQ point would have been.
     let irq = tick_for(&mut apu, 2000, 1);
@@ -336,7 +336,7 @@ fn enabling_inhibit_mid_frame_suppresses_pending_irq() {
 #[test]
 fn zero_cycle_tick_is_noop() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // Ticking 0 cycles should not advance state or fire IRQ.
     apu.tick(0);
@@ -347,7 +347,7 @@ fn zero_cycle_tick_is_noop() {
 #[test]
 fn write_status_does_not_affect_frame_counter() {
     let mut apu = Apu::new();
-    apu.write_frame_counter(0x00);
+    apu.write_frame_counter(0x00, 0);
 
     // write_status ($4015) controls channel enables — it should not touch the
     // frame counter or inhibit flag.

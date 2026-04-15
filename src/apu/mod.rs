@@ -36,6 +36,11 @@ pub struct Apu {
     halt_p2: bool,
     halt_tri: bool,
     halt_noise: bool,
+
+    // ── Reset delay ($4017 writes take effect after 3-4 cycles) ───────────
+    pending_reset_cycles: u8,
+    pending_mode: bool,
+    pending_irq_inhibit: bool,
 }
 
 impl Apu {
@@ -57,6 +62,9 @@ impl Apu {
             halt_p2: false,
             halt_tri: false,
             halt_noise: false,
+            pending_reset_cycles: 0,
+            pending_mode: false,
+            pending_irq_inhibit: false,
         }
     }
 
@@ -64,6 +72,22 @@ impl Apu {
     /// half-frame events at the documented sequencer steps.
     pub fn tick(&mut self, cpu_cycles: u8) {
         for _ in 0..cpu_cycles {
+            // Handle pending $4017 reset
+            if self.pending_reset_cycles > 0 {
+                self.pending_reset_cycles -= 1;
+                if self.pending_reset_cycles == 0 {
+                    self.mode = self.pending_mode;
+                    self.irq_inhibit = self.pending_irq_inhibit;
+                    self.cycle = 0;
+                    if self.irq_inhibit {
+                        self.frame_interrupt = false;
+                    }
+                    if self.mode {
+                        self.clock_half_frame();
+                    }
+                }
+            }
+
             self.cycle += 1;
             if !self.mode {
                 // 4-step mode
@@ -77,7 +101,15 @@ impl Apu {
                         }
                     }
                     29829 => {
+                        if !self.irq_inhibit {
+                            self.frame_interrupt = true;
+                        }
                         self.clock_half_frame();
+                    }
+                    29830 => {
+                        if !self.irq_inhibit {
+                            self.frame_interrupt = true;
+                        }
                         self.cycle = 0;
                     }
                     _ => {}
@@ -88,7 +120,6 @@ impl Apu {
                     7457 => {}
                     14913 => self.clock_half_frame(),
                     22371 => {}
-                    29829 => {} // (no event in 5-step at this step)
                     37281 => self.clock_half_frame(),
                     37282 => self.cycle = 0,
                     _ => {}
@@ -173,16 +204,10 @@ impl Apu {
     /// $4017 write: bit 7 = mode (0=4-step, 1=5-step), bit 6 = IRQ inhibit.
     /// Resets the frame-counter cycle. In 5-step mode a half-frame is
     /// immediately generated; in 4-step it is not.
-    pub fn write_frame_counter(&mut self, val: u8) {
-        self.mode = val & 0x80 != 0;
-        self.irq_inhibit = val & 0x40 != 0;
-        if self.irq_inhibit {
-            self.frame_interrupt = false;
-        }
-        self.cycle = 0;
-        if self.mode {
-            // 5-step mode: immediate half-frame on write
-            self.clock_half_frame();
-        }
+    pub fn write_frame_counter(&mut self, val: u8, total_cycles: usize) {
+        self.pending_mode = val & 0x80 != 0;
+        self.pending_irq_inhibit = val & 0x40 != 0;
+        // Delay of 3 or 4 cycles
+        self.pending_reset_cycles = if total_cycles % 2 != 0 { 3 } else { 4 };
     }
 }

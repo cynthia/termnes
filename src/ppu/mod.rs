@@ -66,6 +66,8 @@ pub struct Ppu {
     pub dbg_scroll_writes_vblank: u64,
     pub dbg_last_sprite0: Option<Sprite0Debug>,
     pub dbg_last_sprite0_hit: Option<Sprite0Debug>,
+    pub odd_frame: bool,
+    pub last_write: u8,
 }
 
 impl Ppu {
@@ -98,6 +100,8 @@ impl Ppu {
             dbg_scroll_writes_vblank: 0,
             dbg_last_sprite0: None,
             dbg_last_sprite0_hit: None,
+            odd_frame: false,
+            last_write: 0,
         }
     }
 
@@ -163,13 +167,14 @@ impl Ppu {
 
     /// $2002 STATUS — returns status byte, clears VBlank flag and write latch.
     pub fn read_status(&mut self) -> u8 {
-        let result = (self.status & 0xE0) | (self.data_buffer & 0x1F);
+        let result = (self.status & 0xE0) | (self.last_write & 0x1F);
         self.status &= !0x80; // clear VBlank flag
         self.write_latch = false;
         result
     }
 
-    /// $2004 OAM DATA — returns OAM byte at current OAM address.
+    /// $2002 STATUS — returns status byte, clears VBlank flag and write latch.
+
     pub fn read_oam_data(&self) -> u8 {
         self.oam[self.oam_addr as usize]
     }
@@ -195,6 +200,7 @@ impl Ppu {
 
     /// $2000 CTRL
     pub fn write_ctrl(&mut self, val: u8) {
+        self.last_write = val;
         let old_nmi_enabled = (self.ctrl & 0x80) != 0;
         self.ctrl = val;
         let new_nmi_enabled = (val & 0x80) != 0;
@@ -211,11 +217,13 @@ impl Ppu {
 
     /// $2001 MASK
     pub fn write_mask(&mut self, val: u8) {
+        self.last_write = val;
         self.mask = val;
     }
 
     /// $2003 OAM ADDR
     pub fn write_oam_addr(&mut self, val: u8) {
+        self.last_write = val;
         self.oam_addr = val;
     }
 
@@ -223,6 +231,7 @@ impl Ppu {
     /// Attribute bytes (OAM index % 4 == 2) have bits 2-4 hardwired to 0 on
     /// real hardware, so mask them out on write.
     pub fn write_oam_data(&mut self, val: u8) {
+        self.last_write = val;
         let idx = self.oam_addr as usize;
         let masked = if idx % 4 == 2 { val & 0xE3 } else { val };
         self.oam[idx] = masked;
@@ -233,6 +242,7 @@ impl Ppu {
     /// (coarse Y + fine Y). Values are latched into `t` (not v) so mid-frame
     /// writes only affect rendering after the next horizontal/vertical copy.
     pub fn write_scroll(&mut self, val: u8) {
+        self.last_write = val;
         if self.scanline >= 0 && self.scanline < 240 {
             self.dbg_scroll_writes_visible += 1;
         } else {
@@ -253,6 +263,7 @@ impl Ppu {
 
     /// $2006 ADDR — first write = high byte, second write = low byte.
     pub fn write_addr(&mut self, val: u8) {
+        self.last_write = val;
         if !self.write_latch {
             self.temp_vram_addr = (self.temp_vram_addr & 0x00FF) | ((val as u16 & 0x3F) << 8);
             self.write_latch = true;
@@ -265,7 +276,9 @@ impl Ppu {
 
     /// $2007 DATA — writes to PPU memory at current VRAM address, then increments.
     pub fn write_data(&mut self, val: u8, cartridge: &mut Cartridge) {
-        let addr = self.vram_addr;
+        self.last_write = val;
+        let addr = self.vram_addr & 0x3FFF;
+
         self.ppu_write(addr, val, cartridge);
         let inc = if self.ctrl & 0x04 != 0 { 32 } else { 1 };
         self.vram_addr = self.vram_addr.wrapping_add(inc);

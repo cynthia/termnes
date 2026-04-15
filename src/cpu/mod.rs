@@ -59,6 +59,8 @@ impl Cpu {
 
     /// Fetches, decodes, and executes one instruction. Returns cycles consumed.
     pub fn step(&mut self) -> u8 {
+        let start_cycles = self.bus.total_cycles;
+
         let opcode_byte = self.bus.cpu_read(self.pc);
         self.pc = self.pc.wrapping_add(1);
 
@@ -66,16 +68,24 @@ impl Cpu {
         let (addr, page_crossed) = self.resolve_addr(info.mode);
         let extra = self.execute(info.opcode, info.mode, addr, page_crossed, info.extra_cycle);
 
-        let cycles = info.cycles + extra;
-        self.bus.tick(cycles);
-        self.total_cycles += cycles as u64;
+        let target_cycles = info.cycles + extra;
+        let mut consumed = (self.bus.total_cycles - start_cycles) as u8;
+
+        // Tick any remaining "idle" cycles for this instruction
+        while consumed < target_cycles {
+            self.bus.tick(1);
+            consumed += 1;
+        }
+
+        self.total_cycles += consumed as u64;
+
         if self.bus.poll_nmi() {
             self.nmi();
         }
         if self.bus.poll_irq() && !self.status.contains(CpuFlags::IRQ_DIS) {
             self.irq();
         }
-        cycles
+        consumed
     }
 
     /// Non-maskable interrupt: pushes PC and status, loads vector at $FFFA-$FFFB.

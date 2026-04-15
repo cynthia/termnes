@@ -14,7 +14,7 @@ pub struct Bus {
     dma_page: u8,
     dma_active: bool,
     dma_addr: u8,
-    total_cycles: usize,
+    pub total_cycles: usize,
 }
 
 impl Bus {
@@ -37,6 +37,7 @@ impl Bus {
 
     /// CPU reads a byte from the address space.
     pub fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.tick(1);
         match addr {
             0x0000..=0x1FFF => self.cpu_ram[(addr & 0x07FF) as usize],
             0x2000..=0x3FFF => self.ppu_register_read(addr & 0x2007),
@@ -52,6 +53,7 @@ impl Bus {
 
     /// CPU writes a byte to the address space.
     pub fn cpu_write(&mut self, addr: u16, val: u8) {
+        self.tick(1);
         match addr {
             0x0000..=0x1FFF => self.cpu_ram[(addr & 0x07FF) as usize] = val,
             0x2000..=0x3FFF => self.ppu_register_write(addr & 0x2007, val),
@@ -65,7 +67,7 @@ impl Bus {
                 self.joypad1.write(val);
                 self.joypad2.write(val);
             }
-            0x4017 => self.apu.write_frame_counter(val),
+            0x4017 => self.apu.write_frame_counter(val, self.total_cycles),
             0x4000..=0x4013 => self.apu.write_register(addr, val),
             0x4018..=0x5FFF => {} // expansion ROM stubs
             0x6000..=0x7FFF => self.prg_ram[(addr - 0x6000) as usize] = val,
@@ -76,36 +78,24 @@ impl Bus {
     // ── PPU register bridge ──────────────────────────────────────────────────
 
     fn ppu_register_read(&mut self, addr: u16) -> u8 {
-        match addr {
-            0x2002 => self.ppu.read_status(),
-            0x2004 => self.ppu.read_oam_data(),
-            0x2007 => self.ppu.read_data(&self.cartridge),
-            _ => 0, // write-only registers return 0
-        }
+        self.ppu.cpu_read(addr, &self.cartridge)
     }
 
     fn ppu_register_write(&mut self, addr: u16, val: u8) {
-        match addr {
-            0x2000 => self.ppu.write_ctrl(val),
-            0x2001 => self.ppu.write_mask(val),
-            0x2003 => self.ppu.write_oam_addr(val),
-            0x2004 => self.ppu.write_oam_data(val),
-            0x2005 => self.ppu.write_scroll(val),
-            0x2006 => self.ppu.write_addr(val),
-            0x2007 => self.ppu.write_data(val, &mut self.cartridge),
-            _ => {}
-        }
+        self.ppu.cpu_write(addr, val, &mut self.cartridge)
     }
 
     // ── Timing ───────────────────────────────────────────────────────────────
 
     /// Advances the PPU by 3 cycles for each CPU cycle and clocks the APU frame counter.
     pub fn tick(&mut self, cpu_cycles: u8) {
-        for _ in 0..(cpu_cycles as usize * 3) {
+        for _ in 0..cpu_cycles {
             self.ppu.tick(&mut self.cartridge);
+            self.ppu.tick(&mut self.cartridge);
+            self.ppu.tick(&mut self.cartridge);
+            self.apu.tick(1);
+            self.total_cycles = self.total_cycles.wrapping_add(1);
         }
-        self.apu.tick(cpu_cycles);
-        self.total_cycles = self.total_cycles.wrapping_add(cpu_cycles as usize);
     }
 
     // ── OAM DMA ──────────────────────────────────────────────────────────────
@@ -119,13 +109,21 @@ impl Bus {
         }
         let base = (self.dma_page as u16) << 8;
         for i in 0u16..256 {
-            let val = self.cpu_read(base + i);
+            // Internal access to avoid double-tick in cpu_read/write
+            let val = match base + i {
+                0x0000..=0x1FFF => self.cpu_ram[((base + i) & 0x07FF) as usize],
+                0x6000..=0x7FFF => self.prg_ram[(base + i - 0x6000) as usize],
+                0x8000..=0xFFFF => self.cartridge.cpu_read(base + i).unwrap_or(0),
+                _ => 0,
+            };
+            self.tick(1); // Read cycle
             let oam_idx = self.ppu.oam_addr.wrapping_add(i as u8) as usize;
             let masked = if oam_idx % 4 == 2 { val & 0xE3 } else { val };
             self.ppu.oam[oam_idx] = masked;
+            self.tick(1); // Write cycle
         }
         self.dma_active = false;
-        513
+        513 // 1 dummy + 512 read/write
     }
 
     // ── Debug ────────────────────────────────────────────────────────────────
