@@ -332,7 +332,6 @@ mod tests {
 
     #[test]
     fn vertical_mirroring() {
-        let mut cart = make_cart();
         // Set cart mirroring to vertical
         let mut rom = Vec::new();
         rom.extend_from_slice(b"NES\x1A");
@@ -342,7 +341,7 @@ mod tests {
         rom.extend_from_slice(&[0u8; 8]);
         rom.extend(vec![0u8; 0x4000]);
         rom.extend(vec![0u8; 0x2000]);
-        cart = Cartridge::from_ines(&rom).unwrap();
+        let cart = Cartridge::from_ines(&rom).unwrap();
 
         let ppu = Ppu::new(Mirroring::Vertical);
         // NT0 ($2000) and NT2 ($2800) share physical bank 0
