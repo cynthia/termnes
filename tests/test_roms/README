@@ -1,0 +1,85 @@
+Test ROMs live in this directory. None are committed — the integration
+tests under tests/blargg_tests.rs and tests/nestest.rs *skip silently* if
+their ROM is missing, so `cargo test` passes on a bare checkout and
+tightens up as you drop ROMs in.
+
+All ROMs listed here are freely distributed by their authors for emulator
+testing. Originals: https://www.nesdev.org/wiki/Emulator_tests
+
+
+─── Fetch them automatically ───────────────────────────────────────────
+
+    scripts/fetch_test_roms.sh
+
+Downloads every ROM listed below from christopherpow/nes-test-roms on
+GitHub (a curated mirror of the nesdev-wiki links). Skips files already
+present; pass -f to re-download.
+
+
+─── nestest (Kevin Horton) ──────────────────────────────────────────────
+
+Drives every official 6502 opcode; the gold standard for CPU regression.
+  File:   nestest.nes
+  Source: https://www.nesdev.org/wiki/Emulator_tests#NES_Test
+  Also includes `nestest.log` — the cycle-exact reference trace, useful
+  for manual diffing when a test fails.
+
+
+─── Blargg: instr_test-v5 (CPU instruction behavior) ────────────────────
+
+The all-in-one ROM:
+  File:   official_only.nes     (exercises only official opcodes)
+
+Or the 16 sub-tests from `rom_singles/`, which give sharper error output:
+  01-basics.nes        05-zp_xy.nes       09-ind_y.nes       13-rts.nes
+  02-implied.nes       06-absolute.nes    10-branches.nes    14-rti.nes
+  03-immediate.nes     07-abs_xy.nes      11-stack.nes       15-brk.nes
+  04-zero_page.nes     08-ind_x.nes       12-jmp_jsr.nes     16-special.nes
+
+  Source: http://blargg.8bitalley.com/parodius/nes-tests/instr_test-v5.zip
+
+
+─── Blargg: instr_timing ────────────────────────────────────────────────
+
+Verifies cycle counts for every instruction + the 8 branch scenarios.
+Supersedes the older `cpu_timing_test6` (which only drew results to the
+PPU screen and can't be polled programmatically). Requires a working
+APU length counter.
+  Files:  1-instr_timing.nes, 2-branch_timing.nes
+  Source: http://blargg.8bitalley.com/parodius/nes-tests/instr_timing.zip
+
+
+─── Blargg: ppu_vbl_nmi ─────────────────────────────────────────────────
+
+VBlank flag and NMI timing.
+  File:   ppu_vbl_nmi.nes
+  Source: http://blargg.8bitalley.com/parodius/nes-tests/ppu_vbl_nmi.zip
+
+
+─── Blargg: sprite_hit_tests ────────────────────────────────────────────
+
+Sprite-0 hit edge cases (critical given our recent v/t/x rewrite).
+  File:   sprite_hit.nes        (either the all-in-one or copy a sub-test)
+  Source: http://blargg.8bitalley.com/parodius/nes-tests/sprite_hit_tests_2005.10.05.zip
+
+
+─── Blargg: oam_stress ──────────────────────────────────────────────────
+
+OAM DMA / corruption stress test.
+  File:   oam_stress.nes
+  Source: http://blargg.8bitalley.com/parodius/nes-tests/oam_stress.zip
+
+
+─── Blargg: apu_test ────────────────────────────────────────────────────
+
+APU register behavior. Will fail loudly until we implement the APU.
+  File:   apu_test.nes
+  Source: http://blargg.8bitalley.com/parodius/nes-tests/apu_test.zip
+
+
+─── Running ─────────────────────────────────────────────────────────────
+
+  cargo test --release              # runs everything (skips missing ROMs)
+  cargo test --release blargg       # just the Blargg suite
+  cargo test --release nestest      # just nestest
+  cargo test --release -- --nocapture   # see the [pass]/[skip] messages

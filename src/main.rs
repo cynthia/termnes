@@ -1,0 +1,515 @@
+use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::time::{Duration, Instant};
+
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+
+use nes_tui::bus::Bus;
+use nes_tui::cartridge::Cartridge;
+use nes_tui::cpu::Cpu;
+use nes_tui::cpu::opcodes::decode;
+use nes_tui::input::JoypadButton;
+use nes_tui::renderer::TuiRenderer;
+
+/// ~60.0988 Hz NTSC frame duration
+const FRAME_DURATION: Duration = Duration::from_micros(16_639);
+
+fn main() {
+    // Restore terminal on panic
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+        default_hook(info);
+    }));
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: nes-tui <rom.nes> [--trace] [--trace-log PATH]");
+        std::process::exit(1);
+    }
+
+    let trace_mode = args.iter().any(|a| a == "--trace");
+    let trace_log_path = args
+        .iter()
+        .position(|a| a == "--trace-log")
+        .and_then(|i| args.get(i + 1).cloned())
+        .unwrap_or_else(|| "nes_trace.log".to_string());
+
+    let cartridge = match Cartridge::from_file(&args[1]) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load ROM: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!(
+        "Loaded ROM: mapper {}, {} PRG banks",
+        cartridge.mapper_id,
+        cartridge.prg_rom.len() / 16384
+    );
+    eprintln!();
+    eprintln!("NES TUI Emulator");
+    eprintln!("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}");
+    eprintln!("Controls:");
+    eprintln!("  Arrow keys  - D-Pad");
+    eprintln!("  Z           - A button");
+    eprintln!("  X           - B button");
+    eprintln!("  A           - Select");
+    eprintln!("  S           - Start");
+    eprintln!("  Esc         - Quit");
+    eprintln!("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}");
+
+    let bus = Bus::new(cartridge);
+    let mut cpu = Cpu::new(bus);
+    cpu.reset();
+
+    if trace_mode {
+        eprintln!("Trace mode (headless). Writing to {}", trace_log_path);
+        run_trace(&mut cpu, &trace_log_path);
+        return;
+    }
+
+    let mut renderer = match TuiRenderer::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Renderer init failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    run_emulation(&mut cpu, &mut renderer);
+}
+
+fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer) {
+    eprintln!("Emulation started. Press Esc or Ctrl+C to quit.");
+    let mut frame_count: u64 = 0;
+    let mut input = InputState::new(renderer.has_keyboard_enhancement);
+
+    loop {
+        let frame_start = Instant::now();
+
+        // Run CPU until PPU completes a frame (~29780 CPU cycles for NTSC)
+        while !cpu.bus.ppu.frame_complete {
+            // Handle pending OAM DMA (513 CPU cycles)
+            let dma_cycles = cpu.bus.do_dma();
+            if dma_cycles > 0 {
+                // Tick both PPU and APU during DMA (CPU is halted, but PPU/APU continue)
+                for _ in 0..dma_cycles as u32 {
+                    for _ in 0..3 {
+                        cpu.bus.ppu.tick(&cpu.bus.cartridge);
+                    }
+                    cpu.bus.apu.tick(1);
+                }
+                if cpu.bus.poll_nmi() {
+                    cpu.nmi();
+                }
+                if cpu.bus.poll_irq() {
+                    cpu.irq();
+                }
+                continue;
+            }
+
+            // step() handles bus.tick() and NMI polling internally
+            cpu.step();
+        }
+        cpu.bus.ppu.frame_complete = false;
+        frame_count += 1;
+
+        if frame_count % 60 == 0 {
+            // Log progress every 60 frames (approx 1 second) to stderr
+            // eprintln!("Frames completed: {}", frame_count);
+        }
+
+        // Render the frame
+        if let Err(e) = renderer.render_frame(&cpu.bus.ppu.framebuffer) {
+            eprintln!("Render error: {}", e);
+            break;
+        }
+
+        // Handle input once per frame (non-blocking)
+        if handle_input(cpu, &mut input) {
+            break;
+        }
+        // Tick the auto-release timers so terminals without key-release
+        // events still "unpress" held buttons.
+        input.tick_frame(cpu);
+
+        // Frame timing — sleep to maintain ~60fps
+        let elapsed = frame_start.elapsed();
+        if elapsed < FRAME_DURATION {
+            std::thread::sleep(FRAME_DURATION - elapsed);
+        }
+    }
+}
+
+/// Headless trace mode: runs the emulator, keeps a ring buffer of the last N
+/// CPU instructions, logs frame-completion summaries, and dumps the ring buffer
+/// on hang (too many cycles without a frame completing) or timeout.
+fn run_trace(cpu: &mut Cpu, log_path: &str) {
+    const RING_SIZE: usize = 8192;
+    const HANG_CYCLE_LIMIT: u64 = 200_000; // expected ~29_780 per frame
+    const TIMEOUT: Duration = Duration::from_secs(90);
+
+    let file = match File::create(log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Failed to open trace log {}: {}", log_path, e);
+            return;
+        }
+    };
+    let mut log = BufWriter::new(file);
+
+    let _ = writeln!(log, "NES Trace Log");
+    let _ = writeln!(log, "Format: [#INSTR] PC OP:OPBYTES  A X Y SP P  OPCODE MODE  SL:scanline DOT:cycle");
+    let _ = writeln!(log, "---");
+
+    let mut frame_count: u64 = 0;
+    let mut instr_count: u64 = 0;
+    let mut total_cycles: u64 = 0;
+    let start = Instant::now();
+    let mut ring: VecDeque<String> = VecDeque::with_capacity(RING_SIZE + 1);
+
+    loop {
+        let mut cycles_in_frame: u64 = 0;
+        let frame_start_instr = instr_count;
+
+        while !cpu.bus.ppu.frame_complete {
+            // DMA handling (copied from run_emulation)
+            let dma_cycles = cpu.bus.do_dma();
+            if dma_cycles > 0 {
+                for _ in 0..dma_cycles as u32 {
+                    for _ in 0..3 {
+                        cpu.bus.ppu.tick(&cpu.bus.cartridge);
+                    }
+                    cpu.bus.apu.tick(1);
+                }
+                if cpu.bus.poll_nmi() {
+                    cpu.nmi();
+                }
+                if cpu.bus.poll_irq() {
+                    cpu.irq();
+                }
+                cycles_in_frame += dma_cycles as u64;
+                total_cycles += dma_cycles as u64;
+                push_ring(&mut ring, format!("  [OAM DMA {} cycles]", dma_cycles), RING_SIZE);
+                continue;
+            }
+
+            // Peek at instruction bytes without side effects
+            let pc = cpu.pc;
+            let b0 = cpu.bus.peek(pc);
+            let info = decode(b0);
+            let b1 = cpu.bus.peek(pc.wrapping_add(1));
+            let b2 = cpu.bus.peek(pc.wrapping_add(2));
+            let bytes_str = match info.bytes {
+                1 => format!("{:02X}      ", b0),
+                2 => format!("{:02X} {:02X}   ", b0, b1),
+                3 => format!("{:02X} {:02X} {:02X}", b0, b1, b2),
+                _ => format!("{:02X}      ", b0),
+            };
+            let line = format!(
+                "[{:>10}] {:04X} {}  A:{:02X} X:{:02X} Y:{:02X} SP:{:02X} P:{:02X}  {:?} {:?}  SL:{:>3} DOT:{:>3}",
+                instr_count,
+                pc,
+                bytes_str,
+                cpu.a, cpu.x, cpu.y, cpu.sp, cpu.status.bits(),
+                info.opcode, info.mode,
+                cpu.bus.ppu.scanline, cpu.bus.ppu.cycle
+            );
+            push_ring(&mut ring, line, RING_SIZE);
+
+            let cycles = cpu.step();
+            cycles_in_frame += cycles as u64;
+            total_cycles += cycles as u64;
+            instr_count += 1;
+
+            // Hang detection within a single frame
+            if cycles_in_frame > HANG_CYCLE_LIMIT {
+                let _ = writeln!(log,
+                    "\n!!! HANG DETECTED at frame {} after {} in-frame cycles ({} total instr) !!!",
+                    frame_count, cycles_in_frame, instr_count);
+                dump_diagnostics(&mut log, cpu, &ring, frame_count, instr_count, total_cycles, start.elapsed());
+                let _ = log.flush();
+                eprintln!("HANG DETECTED at frame {}. Trace dumped to {}", frame_count, log_path);
+                return;
+            }
+        }
+
+        cpu.bus.ppu.frame_complete = false;
+        frame_count += 1;
+
+        let _ = writeln!(log,
+            "=== FRAME {:>5} done: {:>6} in-frame cycles, {:>6} instr  (total: {} instr, {} cyc, elapsed {:?}) ===",
+            frame_count,
+            cycles_in_frame,
+            instr_count - frame_start_instr,
+            instr_count, total_cycles, start.elapsed());
+        // Flush occasionally so we don't lose data on a hard hang
+        if frame_count % 30 == 0 {
+            let _ = log.flush();
+        }
+
+        if start.elapsed() > TIMEOUT {
+            let _ = writeln!(log, "\nTIMEOUT after {:?} ({} frames, {} instr)", start.elapsed(), frame_count, instr_count);
+            dump_diagnostics(&mut log, cpu, &ring, frame_count, instr_count, total_cycles, start.elapsed());
+            let _ = log.flush();
+            eprintln!("Timeout reached at frame {}. Trace dumped to {}", frame_count, log_path);
+            return;
+        }
+    }
+}
+
+fn push_ring(ring: &mut VecDeque<String>, line: String, max: usize) {
+    if ring.len() >= max {
+        ring.pop_front();
+    }
+    ring.push_back(line);
+}
+
+fn dump_diagnostics(
+    log: &mut BufWriter<File>,
+    cpu: &Cpu,
+    ring: &VecDeque<String>,
+    frame_count: u64,
+    instr_count: u64,
+    total_cycles: u64,
+    elapsed: Duration,
+) {
+    let _ = writeln!(log, "\n--- Summary ---");
+    let _ = writeln!(log, "frames:       {}", frame_count);
+    let _ = writeln!(log, "instructions: {}", instr_count);
+    let _ = writeln!(log, "cpu cycles:   {}", total_cycles);
+    let _ = writeln!(log, "elapsed:      {:?}", elapsed);
+
+    let _ = writeln!(log, "\n--- CPU state ---");
+    let _ = writeln!(log,
+        "PC:{:04X} A:{:02X} X:{:02X} Y:{:02X} SP:{:02X} P:{:02X}",
+        cpu.pc, cpu.a, cpu.x, cpu.y, cpu.sp, cpu.status.bits());
+
+    let _ = writeln!(log, "\n--- PPU state ---");
+    let _ = writeln!(log,
+        "scanline:{} cycle:{} frame_complete:{} nmi_triggered:{}",
+        cpu.bus.ppu.scanline, cpu.bus.ppu.cycle,
+        cpu.bus.ppu.frame_complete, cpu.bus.ppu.nmi_triggered);
+    let _ = writeln!(log,
+        "ctrl:{:02X} mask:{:02X} status:{:02X} oam_addr:{:02X}",
+        cpu.bus.ppu.ctrl, cpu.bus.ppu.mask, cpu.bus.ppu.status, cpu.bus.ppu.oam_addr);
+    let _ = writeln!(log,
+        "vram_addr:{:04X} temp_vram_addr:{:04X} fine_x:{} write_latch:{}",
+        cpu.bus.ppu.vram_addr, cpu.bus.ppu.temp_vram_addr,
+        cpu.bus.ppu.fine_x, cpu.bus.ppu.write_latch);
+    let _ = writeln!(log,
+        "t:{:04X} v:{:04X} fx:{}  [coarse_x(t)={}, coarse_y(t)={}, nt(t)={}, fine_y(t)={}]",
+        cpu.bus.ppu.temp_vram_addr, cpu.bus.ppu.vram_addr, cpu.bus.ppu.fine_x,
+        cpu.bus.ppu.temp_vram_addr & 0x1F,
+        (cpu.bus.ppu.temp_vram_addr >> 5) & 0x1F,
+        (cpu.bus.ppu.temp_vram_addr >> 10) & 0x03,
+        (cpu.bus.ppu.temp_vram_addr >> 12) & 0x07);
+
+    let _ = writeln!(log, "\n--- OAM (first 4 sprites) ---");
+    for i in 0..4 {
+        let y = cpu.bus.ppu.oam[i * 4];
+        let t = cpu.bus.ppu.oam[i * 4 + 1];
+        let a = cpu.bus.ppu.oam[i * 4 + 2];
+        let x = cpu.bus.ppu.oam[i * 4 + 3];
+        let _ = writeln!(log,
+            "  sprite {}: Y={:02X}({:>3}) tile={:02X} attr={:02X} X={:02X}({:>3})  [flip_v={} flip_h={} behind_bg={} palette={}]",
+            i, y, y, t, a, x, x,
+            a & 0x80 != 0, a & 0x40 != 0, a & 0x20 != 0, a & 0x03);
+    }
+
+    let _ = writeln!(log, "\n--- Sprite-0 Hit Diagnostics ---");
+    let _ = writeln!(log, "collected (spr0 on scanline):    {}", cpu.bus.ppu.dbg_sprite0_collected);
+    let _ = writeln!(log, "opaque-pixel scanlines:          {}", cpu.bus.ppu.dbg_sprite0_opaque_scanlines);
+    let _ = writeln!(log, "opaque-spr but BG transparent:   {}", cpu.bus.ppu.dbg_sprite0_opaque_but_bg_transparent);
+    let _ = writeln!(log, "hits fired:                      {}", cpu.bus.ppu.dbg_sprite0_hits);
+    let _ = writeln!(log, "PPUSCROLL writes (SL 0-239):     {}", cpu.bus.ppu.dbg_scroll_writes_visible);
+    let _ = writeln!(log, "PPUSCROLL writes (VBlank/-1):    {}", cpu.bus.ppu.dbg_scroll_writes_vblank);
+
+    // Dump the HUD rows of each nametable bank. Sprite 0 is at tile row 3-4.
+    // Vertical mirroring: bank 0 = NT0/NT2 (left), bank 1 = NT1/NT3 (right).
+    let _ = writeln!(log, "\n--- Nametable bank 0, rows 0-4 (HUD area, $2000/$2800) ---");
+    for row in 0..5 {
+        let _ = write!(log, "  row {}: ", row);
+        for col in 0..32 {
+            let idx = row * 32 + col;
+            let _ = write!(log, "{:02X} ", cpu.bus.ppu.vram[idx]);
+        }
+        let _ = writeln!(log);
+    }
+    let _ = writeln!(log, "\n--- Nametable bank 1, rows 0-4 (HUD area, $2400/$2C00) ---");
+    for row in 0..5 {
+        let _ = write!(log, "  row {}: ", row);
+        for col in 0..32 {
+            let idx = 0x400 + row * 32 + col;
+            let _ = write!(log, "{:02X} ", cpu.bus.ppu.vram[idx]);
+        }
+        let _ = writeln!(log);
+    }
+    // Sprite 0 is at X=88, Y=25-32. That's tile (col=11, row=3-4). Show those specifically.
+    let _ = writeln!(log, "\nSprite-0 covers tile (col=11, row=3-4).");
+    let _ = writeln!(log, "  bank 0 [3][11] = {:02X}, [4][11] = {:02X}", cpu.bus.ppu.vram[3*32+11], cpu.bus.ppu.vram[4*32+11]);
+    let _ = writeln!(log, "  bank 1 [3][11] = {:02X}, [4][11] = {:02X}", cpu.bus.ppu.vram[0x400+3*32+11], cpu.bus.ppu.vram[0x400+4*32+11]);
+    if let Some(d) = cpu.bus.ppu.dbg_last_sprite0 {
+        let _ = writeln!(log, "last sprite-0 rendered:");
+        let _ = writeln!(log,
+            "  SL={} OAM[Y={:02X},tile={:02X},attr={:02X},X={:02X}] row_used={} lo={:02X} hi={:02X}",
+            d.scanline, d.oam_y, d.oam_tile, d.oam_attr, d.oam_x,
+            d.row_used, d.lo, d.hi);
+        let _ = writeln!(log,
+            "  mask={:02X} bg_enabled={} spr_enabled={}  had_opaque={} first_opaque_x={} had_opaque_bg_overlap={} fired={}",
+            d.mask_at_check, d.bg_enabled, d.spr_enabled,
+            d.had_opaque, d.first_opaque_x, d.had_opaque_bg_at_opaque_spr, d.fired);
+    } else {
+        let _ = writeln!(log, "last sprite-0 rendered:  <never>");
+    }
+    if let Some(d) = cpu.bus.ppu.dbg_last_sprite0_hit {
+        let _ = writeln!(log, "last sprite-0 HIT:");
+        let _ = writeln!(log,
+            "  SL={} OAM[Y={:02X},tile={:02X},attr={:02X},X={:02X}] lo={:02X} hi={:02X}",
+            d.scanline, d.oam_y, d.oam_tile, d.oam_attr, d.oam_x, d.lo, d.hi);
+    } else {
+        let _ = writeln!(log, "last sprite-0 HIT:       <never>");
+    }
+
+    // Stack dump ($0100-$01FF, show around SP)
+    let _ = writeln!(log, "\n--- Stack (around SP=${:02X}) ---", cpu.sp);
+    let sp_lo = cpu.sp.saturating_sub(8);
+    let sp_hi = cpu.sp.saturating_add(16);
+    for i in sp_lo..=sp_hi {
+        let addr = 0x0100u16 | i as u16;
+        let val = cpu.bus.cpu_ram[(addr & 0x07FF) as usize];
+        let marker = if i == cpu.sp { " <- SP" } else { "" };
+        let _ = writeln!(log, "  ${:04X} = {:02X}{}", addr, val, marker);
+    }
+
+    // Zero-page dump (common for NES game state)
+    let _ = writeln!(log, "\n--- Zero page ($0000-$00FF) ---");
+    for row in 0..16 {
+        let base = row * 16;
+        let _ = write!(log, "  ${:02X}:", base);
+        for col in 0..16 {
+            let _ = write!(log, " {:02X}", cpu.bus.cpu_ram[base + col]);
+        }
+        let _ = writeln!(log);
+    }
+
+    let _ = writeln!(log, "\n--- Last {} instructions ---", ring.len());
+    for entry in ring {
+        let _ = writeln!(log, "{}", entry);
+    }
+}
+
+/// Per-button auto-release state. On terminals that don't emit
+/// KeyEventKind::Release (i.e. most terminals, when kitty keyboard protocol
+/// isn't available), we treat every Press as pressing + arming a countdown.
+/// Each frame the counter decrements; at 0 we force a release. As long as the
+/// key is held, terminal auto-repeat refreshes the counter.
+struct InputState {
+    /// Remaining frames before each pressed button auto-releases.
+    /// When `has_enhancement` is true, we rely on real Release events and
+    /// never populate this map.
+    timers: std::collections::HashMap<JoypadButton, u8>,
+    has_enhancement: bool,
+}
+
+impl InputState {
+    /// Frames to hold a button after its last Press event. Must exceed the
+    /// terminal's initial auto-repeat delay (~500 ms on Linux = 30 frames at
+    /// 60 Hz) so a sustained hold doesn't false-release before auto-repeat
+    /// starts refreshing the timer. 35 frames ≈ 583 ms.
+    const HOLD_FRAMES: u8 = 35;
+
+    fn new(has_enhancement: bool) -> Self {
+        Self {
+            timers: std::collections::HashMap::new(),
+            has_enhancement,
+        }
+    }
+
+    /// Press a button. On non-enhanced terminals, arm the auto-release timer.
+    fn press(&mut self, cpu: &mut Cpu, button: JoypadButton) {
+        cpu.bus.joypad1.set_button(button, true);
+        if !self.has_enhancement {
+            self.timers.insert(button, Self::HOLD_FRAMES);
+        }
+    }
+
+    /// Release a button. Clears the auto-release timer.
+    fn release(&mut self, cpu: &mut Cpu, button: JoypadButton) {
+        cpu.bus.joypad1.set_button(button, false);
+        self.timers.remove(&button);
+    }
+
+    /// Advance per-frame timers. When a timer hits 0 the button is released.
+    /// Only runs if we're on a terminal without real Release events.
+    fn tick_frame(&mut self, cpu: &mut Cpu) {
+        if self.has_enhancement {
+            return;
+        }
+        self.timers.retain(|button, counter| {
+            *counter = counter.saturating_sub(1);
+            if *counter == 0 {
+                cpu.bus.joypad1.set_button(*button, false);
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
+/// Maps a keycode to a joypad button, if any.
+fn key_to_button(code: KeyCode) -> Option<JoypadButton> {
+    match code {
+        KeyCode::Char('z') | KeyCode::Char('Z') => Some(JoypadButton::A),
+        KeyCode::Char('x') | KeyCode::Char('X') => Some(JoypadButton::B),
+        KeyCode::Char('a') | KeyCode::Char('A') => Some(JoypadButton::Select),
+        KeyCode::Char('s') | KeyCode::Char('S') => Some(JoypadButton::Start),
+        KeyCode::Up => Some(JoypadButton::Up),
+        KeyCode::Down => Some(JoypadButton::Down),
+        KeyCode::Left => Some(JoypadButton::Left),
+        KeyCode::Right => Some(JoypadButton::Right),
+        _ => None,
+    }
+}
+
+/// Polls all pending input events. Returns true if quit was requested.
+fn handle_input(cpu: &mut Cpu, input: &mut InputState) -> bool {
+    use crossterm::event::KeyEventKind;
+
+    while event::poll(Duration::from_millis(0)).unwrap_or(false) {
+        let Ok(ev) = event::read() else { continue };
+        let Event::Key(key_event) = ev else { continue };
+
+        // Quit on Esc or Ctrl+C (only on initial press, not repeats)
+        if key_event.kind == KeyEventKind::Press
+            && (key_event.code == KeyCode::Esc
+                || (key_event.code == KeyCode::Char('c')
+                    && key_event.modifiers.contains(KeyModifiers::CONTROL)))
+        {
+            return true;
+        }
+
+        let Some(button) = key_to_button(key_event.code) else { continue };
+
+        match key_event.kind {
+            // Press or Repeat both re-arm the hold timer (and re-press, which
+            // is idempotent). Repeat only fires on kitty-enhanced terminals.
+            KeyEventKind::Press | KeyEventKind::Repeat => {
+                input.press(cpu, button);
+            }
+            KeyEventKind::Release => {
+                input.release(cpu, button);
+            }
+        }
+    }
+    false
+}
