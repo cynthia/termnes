@@ -47,8 +47,8 @@ impl Apu {
     pub fn new() -> Self {
         Self {
             cycle: 0,
-            mode: false,
-            irq_inhibit: false,
+            mode: false, // 4-step
+            irq_inhibit: true, // typical power-on state
             frame_interrupt: false,
             enable_p1: false,
             enable_p2: false,
@@ -64,7 +64,7 @@ impl Apu {
             halt_noise: false,
             pending_reset_cycles: 0,
             pending_mode: false,
-            pending_irq_inhibit: false,
+            pending_irq_inhibit: true,
         }
     }
 
@@ -95,22 +95,16 @@ impl Apu {
                     7457 => {} // quarter-frame only
                     14913 => self.clock_half_frame(),
                     22371 => {} // quarter-frame only
-                    29828 => {
+                    29828..=29832 => {
                         if !self.irq_inhibit {
                             self.frame_interrupt = true;
                         }
-                    }
-                    29829 => {
-                        if !self.irq_inhibit {
-                            self.frame_interrupt = true;
+                        if self.cycle >= 29829 && self.cycle <= 29830 {
+                            self.clock_half_frame();
                         }
-                        self.clock_half_frame();
-                    }
-                    29830 => {
-                        if !self.irq_inhibit {
-                            self.frame_interrupt = true;
+                        if self.cycle >= 29830 {
+                            self.cycle = 0;
                         }
-                        self.cycle = 0;
                     }
                     _ => {}
                 }

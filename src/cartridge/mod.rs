@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_mapper() {
-        let rom = make_ines(4, 1, 0, 0, 0, 0); // mapper 4 = MMC3, not supported
+        let rom = make_ines(255, 1, 0, 0, 0, 0); // mapper 255 is not supported
         assert!(Cartridge::from_ines(&rom).is_err());
     }
 
