@@ -1,6 +1,7 @@
 pub mod mapper;
 
 use std::fs;
+use std::path::PathBuf;
 
 use crate::ppu::Mirroring;
 use mapper::{Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, NromMapper, UnromMapper};
@@ -11,6 +12,7 @@ pub struct Cartridge {
     pub mapper_id: u8,
     pub mirroring: Mirroring,
     pub has_battery: bool,
+    pub rom_path: Option<PathBuf>,
     mapper: Box<dyn Mapper>,
 }
 
@@ -77,14 +79,22 @@ impl Cartridge {
             mapper_id,
             mirroring,
             has_battery,
+            rom_path: None,
             mapper,
         })
+    }
+
+    /// Parses an iNES ROM and records the originating file path.
+    pub fn from_ines_with_path(data: &[u8], path: &str) -> Result<Self, String> {
+        let mut cart = Self::from_ines(data)?;
+        cart.rom_path = Some(PathBuf::from(path));
+        Ok(cart)
     }
 
     /// Loads an iNES ROM from disk.
     pub fn from_file(path: &str) -> Result<Self, String> {
         let data = fs::read(path).map_err(|e| format!("Failed to read ROM: {e}"))?;
-        Self::from_ines(&data)
+        Self::from_ines_with_path(&data, path)
     }
 
     pub fn cpu_read(&self, addr: u16) -> Option<u8> {
@@ -295,5 +305,21 @@ mod tests {
         assert_eq!(cart.chr_read(0x0010), 0xAB);
         cart.chr_write(0x1FFF, 0x77);
         assert_eq!(cart.chr_read(0x1FFF), 0x77);
+    }
+
+    #[test]
+    fn from_file_stores_path() {
+        // We can't easily test from_file without a real file, but we can test
+        // that from_ines_with_path stores the path correctly.
+        let rom = make_ines(0, 1, 0, 0, 0, 0);
+        let cart = Cartridge::from_ines_with_path(&rom, "/tmp/test.nes").unwrap();
+        assert_eq!(cart.rom_path.as_deref(), Some(std::path::Path::new("/tmp/test.nes")));
+    }
+
+    #[test]
+    fn from_ines_has_no_path() {
+        let rom = make_ines(0, 1, 0, 0, 0, 0);
+        let cart = Cartridge::from_ines(&rom).unwrap();
+        assert!(cart.rom_path.is_none());
     }
 }
