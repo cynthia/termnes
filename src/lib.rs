@@ -90,4 +90,72 @@ impl Nes {
     pub fn peek(&self, addr: u16) -> u8 {
         self.cpu.bus.peek(addr)
     }
+
+    /// Capture the full emulator state for save/load.
+    pub fn save_state(&self) -> savestate::SaveState {
+        savestate::SaveState::new(
+            self.cpu.capture_state(),
+            self.cpu.bus.ppu.capture_state(),
+            self.cpu.bus.apu.capture_state(),
+            self.cpu.bus.capture_state(),
+            self.cpu.bus.joypad1.capture_state(),
+            self.cpu.bus.joypad2.capture_state(),
+            self.cpu.bus.cartridge.save_mapper_state(),
+        )
+    }
+
+    /// Restore emulator state from a save state.
+    pub fn load_state(&mut self, state: &savestate::SaveState) {
+        self.cpu.restore_state(&state.cpu);
+        self.cpu.bus.ppu.restore_state(&state.ppu);
+        self.cpu.bus.apu.restore_state(&state.apu);
+        self.cpu.bus.restore_state(&state.bus);
+        self.cpu.bus.joypad1.restore_state(&state.joypad1);
+        self.cpu.bus.joypad2.restore_state(&state.joypad2);
+        self.cpu.bus.cartridge.load_mapper_state(&state.mapper);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_rom() -> Vec<u8> {
+        let mut rom = Vec::new();
+        rom.extend_from_slice(b"NES\x1A");
+        rom.push(1); // 1 PRG bank
+        rom.push(0); // 0 CHR banks
+        rom.push(0); // mapper 0, horizontal mirroring
+        rom.push(0);
+        rom.extend_from_slice(&[0u8; 8]);
+        // PRG: fill with NOPs (0xEA), set reset vector to $8000
+        let mut prg = vec![0xEA; 0x4000];
+        prg[0x3FFC] = 0x00; // reset vector low
+        prg[0x3FFD] = 0x80; // reset vector high
+        rom.extend_from_slice(&prg);
+        rom
+    }
+
+    #[test]
+    fn save_state_round_trip() {
+        let mut nes = Nes::from_ines_bytes(&make_test_rom()).unwrap();
+
+        // Run a few frames to get into an interesting state
+        nes.run_frames(5);
+
+        // Capture state
+        let state = nes.save_state();
+        let bytes = state.to_bytes().unwrap();
+
+        // Modify emulator state
+        nes.run_frames(10);
+        let pc_after = nes.cpu.pc;
+
+        // Restore from bytes
+        let restored = savestate::SaveState::from_bytes(&bytes).unwrap();
+        nes.load_state(&restored);
+
+        // PC should be back to the saved state, not the post-10-frame state
+        assert_ne!(nes.cpu.pc, pc_after);
+    }
 }
