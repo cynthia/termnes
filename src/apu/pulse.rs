@@ -1,4 +1,5 @@
 use super::LENGTH_TABLE;
+use crate::savestate::PulseState;
 
 const DUTY_TABLE: [[u8; 8]; 4] = [
     [0, 1, 0, 0, 0, 0, 0, 0], // 12.5%
@@ -191,5 +192,33 @@ impl Pulse {
         } else {
             self.envelope_decay
         }
+    }
+
+    pub fn capture_state(&self) -> PulseState {
+        PulseState {
+            enabled: self.enabled, is_channel_1: self.is_channel_1,
+            duty: self.duty, duty_pos: self.duty_pos,
+            timer_period: self.timer_period, timer_counter: self.timer_counter,
+            length_counter: self.length_counter, length_halt: self.length_halt,
+            envelope_start: self.envelope_start, envelope_divider: self.envelope_divider,
+            envelope_decay: self.envelope_decay, constant_volume: self.constant_volume,
+            volume: self.volume, sweep_enabled: self.sweep_enabled,
+            sweep_period: self.sweep_period, sweep_negate: self.sweep_negate,
+            sweep_shift: self.sweep_shift, sweep_divider: self.sweep_divider,
+            sweep_reload: self.sweep_reload,
+        }
+    }
+
+    pub fn restore_state(&mut self, s: &PulseState) {
+        self.enabled = s.enabled; self.is_channel_1 = s.is_channel_1;
+        self.duty = s.duty; self.duty_pos = s.duty_pos;
+        self.timer_period = s.timer_period; self.timer_counter = s.timer_counter;
+        self.length_counter = s.length_counter; self.length_halt = s.length_halt;
+        self.envelope_start = s.envelope_start; self.envelope_divider = s.envelope_divider;
+        self.envelope_decay = s.envelope_decay; self.constant_volume = s.constant_volume;
+        self.volume = s.volume; self.sweep_enabled = s.sweep_enabled;
+        self.sweep_period = s.sweep_period; self.sweep_negate = s.sweep_negate;
+        self.sweep_shift = s.sweep_shift; self.sweep_divider = s.sweep_divider;
+        self.sweep_reload = s.sweep_reload;
     }
 }

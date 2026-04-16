@@ -1,4 +1,5 @@
 use super::LENGTH_TABLE;
+use crate::savestate::TriangleState;
 
 const TRIANGLE_SEQUENCE: [u8; 32] = [
     15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
@@ -109,5 +110,25 @@ impl Triangle {
             return 0;
         }
         TRIANGLE_SEQUENCE[self.sequence_pos as usize]
+    }
+
+    pub fn capture_state(&self) -> TriangleState {
+        TriangleState {
+            enabled: self.enabled, timer_period: self.timer_period,
+            timer_counter: self.timer_counter, sequence_pos: self.sequence_pos,
+            length_counter: self.length_counter, length_halt: self.length_halt,
+            linear_counter: self.linear_counter,
+            linear_counter_reload: self.linear_counter_reload,
+            linear_counter_reload_flag: self.linear_counter_reload_flag,
+        }
+    }
+
+    pub fn restore_state(&mut self, s: &TriangleState) {
+        self.enabled = s.enabled; self.timer_period = s.timer_period;
+        self.timer_counter = s.timer_counter; self.sequence_pos = s.sequence_pos;
+        self.length_counter = s.length_counter; self.length_halt = s.length_halt;
+        self.linear_counter = s.linear_counter;
+        self.linear_counter_reload = s.linear_counter_reload;
+        self.linear_counter_reload_flag = s.linear_counter_reload_flag;
     }
 }

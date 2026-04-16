@@ -1,3 +1,5 @@
+use crate::savestate::JoypadState;
+
 /// NES joypad — buttons read serially after strobe.
 ///
 /// Button bit layout: A B Select Start Up Down Left Right
@@ -59,5 +61,19 @@ impl Joypad {
     /// Set the pressed state of all buttons at once.
     pub fn set_buttons(&mut self, state: u8) {
         self.button_state = state;
+    }
+
+    pub fn capture_state(&self) -> JoypadState {
+        JoypadState {
+            strobe: self.strobe,
+            button_index: self.button_index,
+            button_state: self.button_state,
+        }
+    }
+
+    pub fn restore_state(&mut self, state: &JoypadState) {
+        self.strobe = state.strobe;
+        self.button_index = state.button_index;
+        self.button_state = state.button_state;
     }
 }

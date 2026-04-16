@@ -2,6 +2,7 @@ use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::input::Joypad;
 use crate::ppu::Ppu;
+use crate::savestate::BusState;
 
 pub struct Bus {
     pub cpu_ram: [u8; 2048],
@@ -190,5 +191,25 @@ impl Bus {
                 Err(e) => eprintln!("Failed to save: {}", e),
             }
         }
+    }
+
+    pub fn capture_state(&self) -> BusState {
+        BusState {
+            cpu_ram: self.cpu_ram.to_vec(),
+            prg_ram: self.prg_ram.to_vec(),
+            dma_page: self.dma_page,
+            dma_active: self.dma_active,
+            dma_addr: self.dma_addr,
+            total_cycles: self.total_cycles,
+        }
+    }
+
+    pub fn restore_state(&mut self, s: &BusState) {
+        if s.cpu_ram.len() == self.cpu_ram.len() { self.cpu_ram.copy_from_slice(&s.cpu_ram); }
+        if s.prg_ram.len() == self.prg_ram.len() { self.prg_ram.copy_from_slice(&s.prg_ram); }
+        self.dma_page = s.dma_page;
+        self.dma_active = s.dma_active;
+        self.dma_addr = s.dma_addr;
+        self.total_cycles = s.total_cycles;
     }
 }

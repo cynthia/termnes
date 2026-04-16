@@ -3,6 +3,7 @@ pub mod opcodes;
 
 use bitflags::bitflags;
 use crate::bus::Bus;
+use crate::savestate::CpuState;
 use addressing::AddressingMode;
 use opcodes::{Opcode, decode};
 
@@ -670,6 +671,22 @@ impl Cpu {
     fn branch(&mut self, addr: u16, page_crossed: bool) -> u8 {
         self.pc = addr;
         if page_crossed { 2 } else { 1 }
+    }
+
+    pub fn capture_state(&self) -> CpuState {
+        CpuState {
+            a: self.a, x: self.x, y: self.y, sp: self.sp, pc: self.pc,
+            status: self.status.bits(),
+            remaining_cycles: self.remaining_cycles,
+            total_cycles: self.total_cycles,
+        }
+    }
+
+    pub fn restore_state(&mut self, s: &CpuState) {
+        self.a = s.a; self.x = s.x; self.y = s.y; self.sp = s.sp; self.pc = s.pc;
+        self.status = CpuFlags::from_bits_truncate(s.status);
+        self.remaining_cycles = s.remaining_cycles;
+        self.total_cycles = s.total_cycles;
     }
 }
 

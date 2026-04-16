@@ -2,6 +2,7 @@ pub mod palette;
 pub mod render;
 
 use crate::cartridge::Cartridge;
+use crate::savestate::PpuState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mirroring {
@@ -308,6 +309,34 @@ impl Ppu {
             7 => self.write_data(val, cartridge),
             _ => {}
         }
+    }
+
+    pub fn capture_state(&self) -> PpuState {
+        PpuState {
+            ctrl: self.ctrl, mask: self.mask, status: self.status,
+            oam_addr: self.oam_addr, vram_addr: self.vram_addr,
+            temp_vram_addr: self.temp_vram_addr, fine_x: self.fine_x,
+            write_latch: self.write_latch, data_buffer: self.data_buffer,
+            oam: self.oam.to_vec(), vram: self.vram.to_vec(),
+            palette: self.palette.to_vec(), chr_ram: self.chr_ram.to_vec(),
+            scanline: self.scanline, cycle: self.cycle,
+            nmi_triggered: self.nmi_triggered, odd_frame: self.odd_frame,
+            last_write: self.last_write,
+        }
+    }
+
+    pub fn restore_state(&mut self, s: &PpuState) {
+        self.ctrl = s.ctrl; self.mask = s.mask; self.status = s.status;
+        self.oam_addr = s.oam_addr; self.vram_addr = s.vram_addr;
+        self.temp_vram_addr = s.temp_vram_addr; self.fine_x = s.fine_x;
+        self.write_latch = s.write_latch; self.data_buffer = s.data_buffer;
+        if s.oam.len() == self.oam.len() { self.oam.copy_from_slice(&s.oam); }
+        if s.vram.len() == self.vram.len() { self.vram.copy_from_slice(&s.vram); }
+        if s.palette.len() == self.palette.len() { self.palette.copy_from_slice(&s.palette); }
+        if s.chr_ram.len() == self.chr_ram.len() { self.chr_ram.copy_from_slice(&s.chr_ram); }
+        self.scanline = s.scanline; self.cycle = s.cycle;
+        self.nmi_triggered = s.nmi_triggered; self.odd_frame = s.odd_frame;
+        self.last_write = s.last_write;
     }
 }
 

@@ -1,3 +1,5 @@
+use crate::savestate::DmcState;
+
 /// Delta Modulation Channel — minimal implementation.
 ///
 /// Only direct-load via $4011 is supported. Full DMA-based sample playback
@@ -28,5 +30,13 @@ impl Dmc {
 
     pub fn output(&self) -> u8 {
         self.output_level
+    }
+
+    pub fn capture_state(&self) -> DmcState {
+        DmcState { output_level: self.output_level }
+    }
+
+    pub fn restore_state(&mut self, s: &DmcState) {
+        self.output_level = s.output_level;
     }
 }

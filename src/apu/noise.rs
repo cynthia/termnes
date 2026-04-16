@@ -1,4 +1,5 @@
 use super::LENGTH_TABLE;
+use crate::savestate::NoiseState;
 
 /// NTSC noise timer period lookup table.
 const NOISE_PERIOD_TABLE: [u16; 16] = [
@@ -133,5 +134,25 @@ impl Noise {
         } else {
             self.envelope_decay
         }
+    }
+
+    pub fn capture_state(&self) -> NoiseState {
+        NoiseState {
+            enabled: self.enabled, timer_period: self.timer_period,
+            timer_counter: self.timer_counter, mode: self.mode,
+            shift_register: self.shift_register, length_counter: self.length_counter,
+            length_halt: self.length_halt, envelope_start: self.envelope_start,
+            envelope_divider: self.envelope_divider, envelope_decay: self.envelope_decay,
+            constant_volume: self.constant_volume, volume: self.volume,
+        }
+    }
+
+    pub fn restore_state(&mut self, s: &NoiseState) {
+        self.enabled = s.enabled; self.timer_period = s.timer_period;
+        self.timer_counter = s.timer_counter; self.mode = s.mode;
+        self.shift_register = s.shift_register; self.length_counter = s.length_counter;
+        self.length_halt = s.length_halt; self.envelope_start = s.envelope_start;
+        self.envelope_divider = s.envelope_divider; self.envelope_decay = s.envelope_decay;
+        self.constant_volume = s.constant_volume; self.volume = s.volume;
     }
 }

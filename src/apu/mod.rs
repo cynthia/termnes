@@ -1,5 +1,7 @@
 //! NES APU — frame counter, five sound channels, mixing, and sample output.
 
+use crate::savestate::ApuState;
+
 mod dmc;
 mod filters;
 mod noise;
@@ -289,5 +291,29 @@ impl Apu {
         self.pending_irq_inhibit = val & 0x40 != 0;
         // Delay of 3 or 4 cycles depending on alignment
         self.pending_reset_cycles = if total_cycles % 2 != 0 { 3 } else { 4 };
+    }
+
+    pub fn capture_state(&self) -> ApuState {
+        ApuState {
+            cycle: self.cycle, mode: self.mode, irq_inhibit: self.irq_inhibit,
+            frame_interrupt: self.frame_interrupt,
+            pending_reset_cycles: self.pending_reset_cycles,
+            pending_mode: self.pending_mode, pending_irq_inhibit: self.pending_irq_inhibit,
+            even_cycle: self.even_cycle,
+            pulse1: self.pulse1.capture_state(), pulse2: self.pulse2.capture_state(),
+            triangle: self.triangle.capture_state(), noise: self.noise.capture_state(),
+            dmc: self.dmc.capture_state(),
+        }
+    }
+
+    pub fn restore_state(&mut self, s: &ApuState) {
+        self.cycle = s.cycle; self.mode = s.mode; self.irq_inhibit = s.irq_inhibit;
+        self.frame_interrupt = s.frame_interrupt;
+        self.pending_reset_cycles = s.pending_reset_cycles;
+        self.pending_mode = s.pending_mode; self.pending_irq_inhibit = s.pending_irq_inhibit;
+        self.even_cycle = s.even_cycle;
+        self.pulse1.restore_state(&s.pulse1); self.pulse2.restore_state(&s.pulse2);
+        self.triangle.restore_state(&s.triangle); self.noise.restore_state(&s.noise);
+        self.dmc.restore_state(&s.dmc);
     }
 }
