@@ -12,6 +12,7 @@ use termnes::cpu::Cpu;
 use termnes::cpu::opcodes::decode;
 use termnes::input::JoypadButton;
 use termnes::renderer::TuiRenderer;
+use termnes::savestate::SaveState;
 
 const AUDIO_SAMPLE_RATE: u32 = 44_100;
 
@@ -76,6 +77,8 @@ fn main() {
     eprintln!("  A           - Select");
     eprintln!("  S           - Start");
     eprintln!("  Esc         - Quit");
+    eprintln!("  F5          - Save state");
+    eprintln!("  F9          - Load state");
     eprintln!("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}");
 
     let bus = Bus::new(cartridge);
@@ -114,10 +117,55 @@ fn main() {
         }
     };
 
-    run_emulation(&mut cpu, &mut renderer, audio.as_ref());
+    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), &args[1]);
 }
 
-fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>) {
+fn save_state_path(rom_path: &str, slot: u8) -> std::path::PathBuf {
+    let p = std::path::Path::new(rom_path);
+    p.with_extension(format!("state{}", slot))
+}
+
+fn do_save_state(cpu: &Cpu, rom_path: &str, slot: u8) {
+    let state = SaveState::new(
+        cpu.capture_state(),
+        cpu.bus.ppu.capture_state(),
+        cpu.bus.apu.capture_state(),
+        cpu.bus.capture_state(),
+        cpu.bus.joypad1.capture_state(),
+        cpu.bus.joypad2.capture_state(),
+        cpu.bus.cartridge.save_mapper_state(),
+    );
+    let path = save_state_path(rom_path, slot);
+    match state.to_bytes() {
+        Ok(bytes) => match std::fs::write(&path, &bytes) {
+            Ok(()) => eprintln!("State saved to {}", path.display()),
+            Err(e) => eprintln!("Failed to write state: {}", e),
+        },
+        Err(e) => eprintln!("Failed to serialize state: {}", e),
+    }
+}
+
+fn do_load_state(cpu: &mut Cpu, rom_path: &str, slot: u8) {
+    let path = save_state_path(rom_path, slot);
+    match std::fs::read(&path) {
+        Ok(bytes) => match SaveState::from_bytes(&bytes) {
+            Ok(state) => {
+                cpu.restore_state(&state.cpu);
+                cpu.bus.ppu.restore_state(&state.ppu);
+                cpu.bus.apu.restore_state(&state.apu);
+                cpu.bus.restore_state(&state.bus);
+                cpu.bus.joypad1.restore_state(&state.joypad1);
+                cpu.bus.joypad2.restore_state(&state.joypad2);
+                cpu.bus.cartridge.load_mapper_state(&state.mapper);
+                eprintln!("State loaded from {}", path.display());
+            }
+            Err(e) => eprintln!("Failed to parse state: {}", e),
+        },
+        Err(e) => eprintln!("No save state in slot {}: {}", slot, e),
+    }
+}
+
+fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>, rom_path: &str) {
     eprintln!("Emulation started. Press Esc or Ctrl+C to quit.");
     let mut frame_count: u64 = 0;
     let mut input = InputState::new(renderer.has_keyboard_enhancement);
@@ -170,7 +218,7 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&Audio
         }
 
         // Handle input once per frame (non-blocking)
-        if handle_input(cpu, &mut input) {
+        if handle_input(cpu, &mut input, rom_path) {
             break;
         }
         // Tick the auto-release timers so terminals without key-release
@@ -528,7 +576,7 @@ fn key_to_button(code: KeyCode) -> Option<JoypadButton> {
 }
 
 /// Polls all pending input events. Returns true if quit was requested.
-fn handle_input(cpu: &mut Cpu, input: &mut InputState) -> bool {
+fn handle_input(cpu: &mut Cpu, input: &mut InputState, rom_path: &str) -> bool {
     use crossterm::event::KeyEventKind;
 
     while event::poll(Duration::from_millis(0)).unwrap_or(false) {
@@ -542,6 +590,21 @@ fn handle_input(cpu: &mut Cpu, input: &mut InputState) -> bool {
                     && key_event.modifiers.contains(KeyModifiers::CONTROL)))
         {
             return true;
+        }
+
+        // Save state (F5) / Load state (F9)
+        if key_event.kind == KeyEventKind::Press {
+            match key_event.code {
+                KeyCode::F(5) => {
+                    do_save_state(cpu, rom_path, 1);
+                    continue;
+                }
+                KeyCode::F(9) => {
+                    do_load_state(cpu, rom_path, 1);
+                    continue;
+                }
+                _ => {}
+            }
         }
 
         let Some(button) = key_to_button(key_event.code) else { continue };
