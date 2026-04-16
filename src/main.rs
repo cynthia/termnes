@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 
 use termnes::audio::AudioOutput;
@@ -12,18 +12,26 @@ use termnes::cartridge::Cartridge;
 use termnes::cpu::Cpu;
 use termnes::cpu::opcodes::decode;
 use termnes::input::JoypadButton;
+use termnes::remote_audio::{self, RemoteAudioSender};
 use termnes::renderer::TuiRenderer;
 use termnes::savestate::SaveState;
 
 #[derive(Parser)]
 #[command(name = "termnes", about = "NES TUI Emulator")]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Path to the ROM file (.nes)
     rom: Option<String>,
 
     /// Disable audio output
     #[arg(long)]
     mute: bool,
+
+    /// Stream audio to a remote listener (e.g. localhost:9001)
+    #[arg(long)]
+    stream_audio: Option<String>,
 
     /// Automatically save state on exit and resume on start
     #[arg(long)]
@@ -40,6 +48,16 @@ struct Args {
     /// Resize terminal to 256x120
     #[arg(long)]
     resize: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Listen for a remote audio stream and play it locally
+    Listen {
+        /// Port to listen on
+        #[arg(long, default_value_t = 9001)]
+        port: u16,
+    },
 }
 
 const AUDIO_SAMPLE_RATE: u32 = 44_100;
@@ -61,6 +79,15 @@ fn main() {
     }));
 
     let args = Args::parse();
+
+    // Handle `listen` subcommand
+    if let Some(Command::Listen { port }) = args.command {
+        if let Err(e) = remote_audio::run_listen(port) {
+            eprintln!("Listen error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     if args.resize {
         let _ = crossterm::execute!(
@@ -112,18 +139,32 @@ fn main() {
     cpu.bus.load_battery_save();
 
     // Audio setup (non-fatal if it fails)
-    let audio = if args.mute {
-        None
+    let (audio, mut remote_audio) = if args.mute {
+        (None, None)
     } else {
         cpu.bus.apu.set_sample_rate(AUDIO_SAMPLE_RATE);
-        match AudioOutput::new(AUDIO_SAMPLE_RATE) {
-            Ok(a) => {
-                eprintln!("Audio: {} Hz", AUDIO_SAMPLE_RATE);
-                Some(a)
+        if let Some(ref addr) = args.stream_audio {
+            // Stream audio to remote listener instead of local device
+            match RemoteAudioSender::connect(addr, AUDIO_SAMPLE_RATE) {
+                Ok(sender) => {
+                    eprintln!("Audio: streaming to {addr} at {AUDIO_SAMPLE_RATE} Hz");
+                    (None, Some(sender))
+                }
+                Err(e) => {
+                    eprintln!("Remote audio disabled: {e}");
+                    (None, None)
+                }
             }
-            Err(e) => {
-                eprintln!("Audio disabled: {}", e);
-                None
+        } else {
+            match AudioOutput::new(AUDIO_SAMPLE_RATE) {
+                Ok(a) => {
+                    eprintln!("Audio: {} Hz", AUDIO_SAMPLE_RATE);
+                    (Some(a), None)
+                }
+                Err(e) => {
+                    eprintln!("Audio disabled: {}", e);
+                    (None, None)
+                }
             }
         }
     };
@@ -142,7 +183,7 @@ fn main() {
         }
     };
 
-    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), &rom_path, args.autoresume);
+    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), remote_audio.as_mut(), &rom_path, args.autoresume);
 }
 
 fn save_state_path(rom_path: &str) -> std::path::PathBuf {
@@ -190,7 +231,7 @@ fn do_load_state(cpu: &mut Cpu, rom_path: &str) {
     }
 }
 
-fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>, rom_path: &str, autoresume: bool) {
+fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>, mut remote_audio: Option<&mut RemoteAudioSender>, rom_path: &str, autoresume: bool) {
     eprintln!("Emulation started. Press Esc or Ctrl+C to quit.");
     let mut frame_count: u64 = 0;
     let mut input = InputState::new(renderer.has_keyboard_enhancement);
@@ -234,10 +275,15 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&Audio
             // eprintln!("Frames completed: {}", frame_count);
         }
 
-        // Drain audio samples and send to output device
-        if let Some(audio) = audio {
+        // Drain audio samples and send to output device (local or remote)
+        if audio.is_some() || remote_audio.is_some() {
             let samples = cpu.bus.apu.drain_samples();
-            audio.queue_samples(&samples);
+            if let Some(a) = audio {
+                a.queue_samples(&samples);
+            }
+            if let Some(ref mut r) = remote_audio {
+                r.queue_samples(&samples);
+            }
         }
 
         // Render the frame

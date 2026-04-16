@@ -5,6 +5,7 @@ pub mod cartridge;
 pub mod cpu;
 pub mod input;
 pub mod ppu;
+pub mod remote_audio;
 pub mod renderer;
 pub mod savestate;
 
