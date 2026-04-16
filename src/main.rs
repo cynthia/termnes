@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::{Duration, Instant};
 
+use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 
 use termnes::audio::AudioOutput;
@@ -13,6 +14,33 @@ use termnes::cpu::opcodes::decode;
 use termnes::input::JoypadButton;
 use termnes::renderer::TuiRenderer;
 use termnes::savestate::SaveState;
+
+#[derive(Parser)]
+#[command(name = "termnes", about = "NES TUI Emulator")]
+struct Args {
+    /// Path to the ROM file (.nes)
+    rom: Option<String>,
+
+    /// Disable audio output
+    #[arg(long)]
+    mute: bool,
+
+    /// Automatically save state on exit and resume on start
+    #[arg(long)]
+    autoresume: bool,
+
+    /// Run in headless trace mode
+    #[arg(long)]
+    trace: bool,
+
+    /// Path for trace log output
+    #[arg(long, default_value = "nes_trace.log")]
+    trace_log: String,
+
+    /// Resize terminal to 256x120
+    #[arg(long)]
+    resize: bool,
+}
 
 const AUDIO_SAMPLE_RATE: u32 = 44_100;
 
@@ -32,8 +60,9 @@ fn main() {
         default_hook(info);
     }));
 
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--resize") {
+    let args = Args::parse();
+
+    if args.resize {
         let _ = crossterm::execute!(
             std::io::stdout(),
             crossterm::terminal::SetSize(256, 120)
@@ -41,21 +70,16 @@ fn main() {
         return;
     }
 
-    if args.len() < 2 {
-        eprintln!("Usage: termnes <rom.nes> [--mute] [--autoresume] [--trace] [--trace-log PATH] [--resize]");
-        std::process::exit(1);
-    }
+    let rom_path = match &args.rom {
+        Some(p) => p.clone(),
+        None => {
+            eprintln!("Error: ROM path is required");
+            eprintln!("Usage: termnes <rom.nes> [OPTIONS]");
+            std::process::exit(1);
+        }
+    };
 
-    let mute = args.iter().any(|a| a == "--mute");
-    let autoresume = args.iter().any(|a| a == "--autoresume");
-    let trace_mode = args.iter().any(|a| a == "--trace");
-    let trace_log_path = args
-        .iter()
-        .position(|a| a == "--trace-log")
-        .and_then(|i| args.get(i + 1).cloned())
-        .unwrap_or_else(|| "nes_trace.log".to_string());
-
-    let cartridge = match Cartridge::from_file(&args[1]) {
+    let cartridge = match Cartridge::from_file(&rom_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Failed to load ROM: {}", e);
@@ -88,7 +112,7 @@ fn main() {
     cpu.bus.load_battery_save();
 
     // Audio setup (non-fatal if it fails)
-    let audio = if mute {
+    let audio = if args.mute {
         None
     } else {
         cpu.bus.apu.set_sample_rate(AUDIO_SAMPLE_RATE);
@@ -104,9 +128,9 @@ fn main() {
         }
     };
 
-    if trace_mode {
-        eprintln!("Trace mode (headless). Writing to {}", trace_log_path);
-        run_trace(&mut cpu, &trace_log_path);
+    if args.trace {
+        eprintln!("Trace mode (headless). Writing to {}", args.trace_log);
+        run_trace(&mut cpu, &args.trace_log);
         return;
     }
 
@@ -118,7 +142,7 @@ fn main() {
         }
     };
 
-    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), &args[1], autoresume);
+    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), &rom_path, args.autoresume);
 }
 
 fn save_state_path(rom_path: &str) -> std::path::PathBuf {

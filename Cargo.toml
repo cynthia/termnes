@@ -9,3 +9,4 @@ bitflags = "2"
 cpal = "0.15"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
+clap = { version = "4.6.1", features = ["derive"] }
