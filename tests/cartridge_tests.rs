@@ -78,8 +78,8 @@ fn test_ines_header_truncated_prg() {
 
 #[test]
 fn test_ines_unsupported_mapper() {
-    // Mapper 4 (MMC3) — not supported
-    let rom = make_ines_rom(2, 0, 0x40, 0x00); // flags6 high nibble = 4 => mapper 4
+    // Mapper 5 (MMC5) — not supported
+    let rom = make_ines_rom(2, 0, 0x50, 0x00); // flags6 high nibble = 5 => mapper 5
     let result = Cartridge::from_ines(&rom);
     assert!(result.is_err(), "should reject unsupported mapper");
     let err = match result {
