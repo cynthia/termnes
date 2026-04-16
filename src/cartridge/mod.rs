@@ -126,6 +126,11 @@ impl Cartridge {
     pub fn check_irq(&self) -> bool {
         self.mapper.check_irq()
     }
+
+    /// Returns the `.sav` file path derived from the ROM path, if any.
+    pub fn sav_path(&self) -> Option<PathBuf> {
+        self.rom_path.as_ref().map(|p| p.with_extension("sav"))
+    }
 }
 
 #[cfg(test)]

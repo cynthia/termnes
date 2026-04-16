@@ -155,4 +155,40 @@ impl Bus {
     pub fn poll_irq(&self) -> bool {
         self.apu.frame_interrupt || self.cartridge.check_irq()
     }
+
+    /// Load battery-backed RAM from a `.sav` file if it exists.
+    pub fn load_battery_save(&mut self) {
+        if !self.cartridge.has_battery {
+            return;
+        }
+        if let Some(path) = self.cartridge.sav_path() {
+            if path.exists() {
+                match std::fs::read(&path) {
+                    Ok(data) if data.len() == 8192 => {
+                        self.prg_ram.copy_from_slice(&data);
+                        eprintln!("Loaded save: {}", path.display());
+                    }
+                    Ok(data) => {
+                        eprintln!("Save file wrong size ({}), ignoring: {}", data.len(), path.display());
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load save: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Write battery-backed RAM to a `.sav` file.
+    pub fn save_battery(&self) {
+        if !self.cartridge.has_battery {
+            return;
+        }
+        if let Some(path) = self.cartridge.sav_path() {
+            match std::fs::write(&path, &self.prg_ram) {
+                Ok(()) => eprintln!("Saved: {}", path.display()),
+                Err(e) => eprintln!("Failed to save: {}", e),
+            }
+        }
+    }
 }

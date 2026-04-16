@@ -81,6 +81,7 @@ fn main() {
     let bus = Bus::new(cartridge);
     let mut cpu = Cpu::new(bus);
     cpu.reset();
+    cpu.bus.load_battery_save();
 
     // Audio setup (non-fatal if it fails)
     let audio = if mute {
@@ -191,6 +192,7 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&Audio
             }
         }
     }
+    cpu.bus.save_battery();
 }
 
 /// Headless trace mode: runs the emulator, keeps a ring buffer of the last N
