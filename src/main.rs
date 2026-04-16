@@ -42,11 +42,12 @@ fn main() {
     }
 
     if args.len() < 2 {
-        eprintln!("Usage: termnes <rom.nes> [--mute] [--trace] [--trace-log PATH] [--resize]");
+        eprintln!("Usage: termnes <rom.nes> [--mute] [--autoresume] [--trace] [--trace-log PATH] [--resize]");
         std::process::exit(1);
     }
 
     let mute = args.iter().any(|a| a == "--mute");
+    let autoresume = args.iter().any(|a| a == "--autoresume");
     let trace_mode = args.iter().any(|a| a == "--trace");
     let trace_log_path = args
         .iter()
@@ -117,15 +118,15 @@ fn main() {
         }
     };
 
-    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), &args[1]);
+    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), &args[1], autoresume);
 }
 
-fn save_state_path(rom_path: &str, slot: u8) -> std::path::PathBuf {
+fn save_state_path(rom_path: &str) -> std::path::PathBuf {
     let p = std::path::Path::new(rom_path);
-    p.with_extension(format!("state{}", slot))
+    p.with_extension("state")
 }
 
-fn do_save_state(cpu: &Cpu, rom_path: &str, slot: u8) {
+fn do_save_state(cpu: &Cpu, rom_path: &str) {
     let state = SaveState::new(
         cpu.capture_state(),
         cpu.bus.ppu.capture_state(),
@@ -135,7 +136,7 @@ fn do_save_state(cpu: &Cpu, rom_path: &str, slot: u8) {
         cpu.bus.joypad2.capture_state(),
         cpu.bus.cartridge.save_mapper_state(),
     );
-    let path = save_state_path(rom_path, slot);
+    let path = save_state_path(rom_path);
     match state.to_bytes() {
         Ok(bytes) => match std::fs::write(&path, &bytes) {
             Ok(()) => eprintln!("State saved to {}", path.display()),
@@ -145,8 +146,8 @@ fn do_save_state(cpu: &Cpu, rom_path: &str, slot: u8) {
     }
 }
 
-fn do_load_state(cpu: &mut Cpu, rom_path: &str, slot: u8) {
-    let path = save_state_path(rom_path, slot);
+fn do_load_state(cpu: &mut Cpu, rom_path: &str) {
+    let path = save_state_path(rom_path);
     match std::fs::read(&path) {
         Ok(bytes) => match SaveState::from_bytes(&bytes) {
             Ok(state) => {
@@ -161,14 +162,18 @@ fn do_load_state(cpu: &mut Cpu, rom_path: &str, slot: u8) {
             }
             Err(e) => eprintln!("Failed to parse state: {}", e),
         },
-        Err(e) => eprintln!("No save state in slot {}: {}", slot, e),
+        Err(_) => {} // no save state file, silently ignore
     }
 }
 
-fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>, rom_path: &str) {
+fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>, rom_path: &str, autoresume: bool) {
     eprintln!("Emulation started. Press Esc or Ctrl+C to quit.");
     let mut frame_count: u64 = 0;
     let mut input = InputState::new(renderer.has_keyboard_enhancement);
+
+    if autoresume {
+        do_load_state(cpu, rom_path);
+    }
 
     loop {
         let frame_start = Instant::now();
@@ -239,6 +244,9 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&Audio
                 std::thread::sleep(FRAME_DURATION - elapsed);
             }
         }
+    }
+    if autoresume {
+        do_save_state(cpu, rom_path);
     }
     cpu.bus.save_battery();
 }
@@ -587,6 +595,8 @@ fn handle_input(cpu: &mut Cpu, input: &mut InputState, rom_path: &str) -> bool {
         if key_event.kind == KeyEventKind::Press
             && (key_event.code == KeyCode::Esc
                 || (key_event.code == KeyCode::Char('c')
+                    && key_event.modifiers.contains(KeyModifiers::CONTROL))
+                || (key_event.code == KeyCode::Char('d')
                     && key_event.modifiers.contains(KeyModifiers::CONTROL)))
         {
             return true;
@@ -596,11 +606,11 @@ fn handle_input(cpu: &mut Cpu, input: &mut InputState, rom_path: &str) -> bool {
         if key_event.kind == KeyEventKind::Press {
             match key_event.code {
                 KeyCode::F(5) => {
-                    do_save_state(cpu, rom_path, 1);
+                    do_save_state(cpu, rom_path);
                     continue;
                 }
                 KeyCode::F(9) => {
-                    do_load_state(cpu, rom_path, 1);
+                    do_load_state(cpu, rom_path);
                     continue;
                 }
                 _ => {}
