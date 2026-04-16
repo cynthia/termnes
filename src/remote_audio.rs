@@ -1,36 +1,69 @@
 use std::collections::VecDeque;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 const MAGIC: &[u8; 4] = b"TNAS";
 
-/// Streams audio samples over TCP to a remote listener.
+/// How many per-frame sample batches the sender may hold in-flight before
+/// dropping on backpressure. At 60 fps, 16 slots ≈ 270 ms of audio.
+/// Dropping is preferable to blocking because blocking would stall the
+/// emulation thread when the network is slow.
+const SENDER_QUEUE_FRAMES: usize = 16;
+
+/// Streams audio samples over TCP to a remote listener. All network I/O
+/// runs on a dedicated worker thread so the emulation thread never blocks
+/// on socket writes.
 pub struct RemoteAudioSender {
-    writer: BufWriter<TcpStream>,
+    tx: SyncSender<Vec<f32>>,
 }
 
 impl RemoteAudioSender {
     pub fn connect(addr: &str, sample_rate: u32) -> Result<Self, String> {
-        let stream = TcpStream::connect(addr).map_err(|e| format!("failed to connect to {addr}: {e}"))?;
+        let stream =
+            TcpStream::connect(addr).map_err(|e| format!("failed to connect to {addr}: {e}"))?;
         let mut writer = BufWriter::new(stream);
         writer
             .write_all(MAGIC)
             .and_then(|()| writer.write_all(&sample_rate.to_le_bytes()))
             .and_then(|()| writer.flush())
             .map_err(|e| format!("failed to send header: {e}"))?;
-        Ok(Self { writer })
+
+        let (tx, rx) = mpsc::sync_channel::<Vec<f32>>(SENDER_QUEUE_FRAMES);
+        thread::Builder::new()
+            .name("termnes-audio-tx".into())
+            .spawn(move || {
+                let mut byte_buf: Vec<u8> = Vec::with_capacity(4096);
+                while let Ok(samples) = rx.recv() {
+                    byte_buf.clear();
+                    byte_buf.reserve(samples.len() * 4);
+                    for s in &samples {
+                        byte_buf.extend_from_slice(&s.to_le_bytes());
+                    }
+                    if writer.write_all(&byte_buf).is_err() {
+                        break;
+                    }
+                    if writer.flush().is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("failed to spawn audio sender thread: {e}"))?;
+
+        Ok(Self { tx })
     }
 
+    /// Hand a batch of samples to the sender thread. Non-blocking: if the
+    /// worker is falling behind and the queue is full, the batch is dropped.
     pub fn queue_samples(&mut self, samples: &[f32]) {
-        for &s in samples {
-            if self.writer.write_all(&s.to_le_bytes()).is_err() {
-                return;
-            }
+        match self.tx.try_send(samples.to_vec()) {
+            Ok(()) | Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => {}
         }
-        let _ = self.writer.flush();
     }
 }
 
