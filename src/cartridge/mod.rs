@@ -128,6 +128,14 @@ impl Cartridge {
         self.mapper.check_irq()
     }
 
+    pub fn save_mapper_state(&self) -> crate::savestate::MapperState {
+        self.mapper.save_mapper_state()
+    }
+
+    pub fn load_mapper_state(&mut self, state: &crate::savestate::MapperState) {
+        self.mapper.load_mapper_state(state);
+    }
+
     /// Returns the `.sav` file path derived from the ROM path, if any.
     pub fn sav_path(&self) -> Option<PathBuf> {
         self.rom_path.as_ref().map(|p| p.with_extension("sav"))

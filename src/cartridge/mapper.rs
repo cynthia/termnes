@@ -1,4 +1,5 @@
 use crate::ppu::Mirroring;
+use crate::savestate::MapperState;
 
 pub trait Mapper {
     fn cpu_read(&self, addr: u16) -> Option<u8>;
@@ -10,6 +11,8 @@ pub trait Mapper {
     }
     fn tick_scanline(&mut self) {}
     fn check_irq(&self) -> bool { false }
+    fn save_mapper_state(&self) -> MapperState;
+    fn load_mapper_state(&mut self, state: &MapperState);
 }
 
 /// NROM (Mapper 0) — no bank switching.
@@ -64,6 +67,12 @@ impl Mapper for NromMapper {
     fn mirroring(&self) -> Mirroring {
         self.mirroring
     }
+
+    fn save_mapper_state(&self) -> MapperState {
+        MapperState::Nrom
+    }
+
+    fn load_mapper_state(&mut self, _state: &MapperState) {}
 }
 
 /// UNROM (Mapper 2) — switches 16KB PRG-ROM banks, 8KB CHR-RAM.
@@ -129,6 +138,22 @@ impl Mapper for UnromMapper {
     fn mirroring(&self) -> Mirroring {
         self.mirroring
     }
+
+    fn save_mapper_state(&self) -> MapperState {
+        MapperState::Unrom {
+            bank_select: self.bank_select,
+            chr_ram: self.chr_ram.to_vec(),
+        }
+    }
+
+    fn load_mapper_state(&mut self, state: &MapperState) {
+        if let MapperState::Unrom { bank_select, chr_ram } = state {
+            self.bank_select = *bank_select;
+            if chr_ram.len() == self.chr_ram.len() {
+                self.chr_ram.copy_from_slice(chr_ram);
+            }
+        }
+    }
 }
 
 /// CNROM (Mapper 3) — switches 8KB CHR-ROM banks, fixed PRG-ROM.
@@ -187,6 +212,18 @@ impl Mapper for CnromMapper {
 
     fn mirroring(&self) -> Mirroring {
         self.mirroring
+    }
+
+    fn save_mapper_state(&self) -> MapperState {
+        MapperState::Cnrom {
+            bank_select: self.bank_select,
+        }
+    }
+
+    fn load_mapper_state(&mut self, state: &MapperState) {
+        if let MapperState::Cnrom { bank_select } = state {
+            self.bank_select = *bank_select;
+        }
     }
 }
 
@@ -365,6 +402,53 @@ impl Mapper for Mmc1Mapper {
     fn mirroring(&self) -> Mirroring {
         self.mirroring
     }
+
+    fn save_mapper_state(&self) -> MapperState {
+        MapperState::Mmc1 {
+            prg_ram: self.prg_ram.to_vec(),
+            chr_ram: self.chr_ram.to_vec(),
+            shift_register: self.shift_register,
+            write_count: self.write_count,
+            control: self.control,
+            chr_bank_0: self.chr_bank_0,
+            chr_bank_1: self.chr_bank_1,
+            prg_bank: self.prg_bank,
+            mirroring: match self.mirroring {
+                Mirroring::Horizontal => 0,
+                Mirroring::Vertical => 1,
+                Mirroring::OneScreenLow => 2,
+                Mirroring::OneScreenHigh => 3,
+            },
+        }
+    }
+
+    fn load_mapper_state(&mut self, state: &MapperState) {
+        if let MapperState::Mmc1 {
+            prg_ram, chr_ram, shift_register, write_count,
+            control, chr_bank_0, chr_bank_1, prg_bank, mirroring,
+        } = state
+        {
+            if prg_ram.len() == self.prg_ram.len() {
+                self.prg_ram.copy_from_slice(prg_ram);
+            }
+            if chr_ram.len() == self.chr_ram.len() {
+                self.chr_ram.copy_from_slice(chr_ram);
+            }
+            self.shift_register = *shift_register;
+            self.write_count = *write_count;
+            self.control = *control;
+            self.chr_bank_0 = *chr_bank_0;
+            self.chr_bank_1 = *chr_bank_1;
+            self.prg_bank = *prg_bank;
+            self.mirroring = match mirroring {
+                0 => Mirroring::Horizontal,
+                1 => Mirroring::Vertical,
+                2 => Mirroring::OneScreenLow,
+                3 => Mirroring::OneScreenHigh,
+                _ => Mirroring::Horizontal,
+            };
+        }
+    }
 }
 
 /// MMC2 (Mapper 9) — Punch-Out!! mapper.
@@ -477,6 +561,47 @@ impl Mapper for Mmc2Mapper {
 
     fn mirroring(&self) -> Mirroring {
         self.mirroring
+    }
+
+    fn save_mapper_state(&self) -> MapperState {
+        MapperState::Mmc2 {
+            prg_bank: self.prg_bank,
+            chr_bank_0_l: self.chr_bank_0_l,
+            chr_bank_0_r: self.chr_bank_0_r,
+            chr_bank_1_l: self.chr_bank_1_l,
+            chr_bank_1_r: self.chr_bank_1_r,
+            latch_0: self.latch_0.get(),
+            latch_1: self.latch_1.get(),
+            mirroring: match self.mirroring {
+                Mirroring::Horizontal => 0,
+                Mirroring::Vertical => 1,
+                Mirroring::OneScreenLow => 2,
+                Mirroring::OneScreenHigh => 3,
+            },
+        }
+    }
+
+    fn load_mapper_state(&mut self, state: &MapperState) {
+        if let MapperState::Mmc2 {
+            prg_bank, chr_bank_0_l, chr_bank_0_r,
+            chr_bank_1_l, chr_bank_1_r, latch_0, latch_1, mirroring,
+        } = state
+        {
+            self.prg_bank = *prg_bank;
+            self.chr_bank_0_l = *chr_bank_0_l;
+            self.chr_bank_0_r = *chr_bank_0_r;
+            self.chr_bank_1_l = *chr_bank_1_l;
+            self.chr_bank_1_r = *chr_bank_1_r;
+            self.latch_0.set(*latch_0);
+            self.latch_1.set(*latch_1);
+            self.mirroring = match mirroring {
+                0 => Mirroring::Horizontal,
+                1 => Mirroring::Vertical,
+                2 => Mirroring::OneScreenLow,
+                3 => Mirroring::OneScreenHigh,
+                _ => Mirroring::Horizontal,
+            };
+        }
     }
 }
 
@@ -654,6 +779,62 @@ impl Mapper for Mmc3Mapper {
 
     fn check_irq(&self) -> bool {
         self.irq_pending
+    }
+
+    fn save_mapper_state(&self) -> MapperState {
+        MapperState::Mmc3 {
+            prg_ram: self.prg_ram.to_vec(),
+            chr_ram: self.chr_ram.to_vec(),
+            registers: self.registers.to_vec(),
+            bank_select: self.bank_select,
+            prg_mode: self.prg_mode,
+            chr_mode: self.chr_mode,
+            mirroring: match self.mirroring {
+                Mirroring::Horizontal => 0,
+                Mirroring::Vertical => 1,
+                Mirroring::OneScreenLow => 2,
+                Mirroring::OneScreenHigh => 3,
+            },
+            irq_latch: self.irq_latch,
+            irq_counter: self.irq_counter,
+            irq_enabled: self.irq_enabled,
+            irq_reload: self.irq_reload,
+            irq_pending: self.irq_pending,
+        }
+    }
+
+    fn load_mapper_state(&mut self, state: &MapperState) {
+        if let MapperState::Mmc3 {
+            prg_ram, chr_ram, registers, bank_select,
+            prg_mode, chr_mode, mirroring,
+            irq_latch, irq_counter, irq_enabled, irq_reload, irq_pending,
+        } = state
+        {
+            if prg_ram.len() == self.prg_ram.len() {
+                self.prg_ram.copy_from_slice(prg_ram);
+            }
+            if chr_ram.len() == self.chr_ram.len() {
+                self.chr_ram.copy_from_slice(chr_ram);
+            }
+            if registers.len() == self.registers.len() {
+                self.registers.copy_from_slice(registers);
+            }
+            self.bank_select = *bank_select;
+            self.prg_mode = *prg_mode;
+            self.chr_mode = *chr_mode;
+            self.mirroring = match mirroring {
+                0 => Mirroring::Horizontal,
+                1 => Mirroring::Vertical,
+                2 => Mirroring::OneScreenLow,
+                3 => Mirroring::OneScreenHigh,
+                _ => Mirroring::Horizontal,
+            };
+            self.irq_latch = *irq_latch;
+            self.irq_counter = *irq_counter;
+            self.irq_enabled = *irq_enabled;
+            self.irq_reload = *irq_reload;
+            self.irq_pending = *irq_pending;
+        }
     }
 }
 
