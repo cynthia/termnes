@@ -1,17 +1,69 @@
 # Termnes
 
 A terminal-based NES/Famicom emulator written in Rust.
-No audio support. Supports UNROM, MMC1, MMC2, and MMC3.
+Supports UNROM, MMC1, MMC2, and MMC3.
 
 ## Run
 ```bash
 cargo run --release -- <path-to-rom.nes>
 ```
 
+### Controls
+| Key        | Action   |
+|------------|----------|
+| Arrow keys | D-Pad    |
+| Z          | B button |
+| X          | A button |
+| A          | Select   |
+| S          | Start    |
+| F5         | Save state |
+| F9         | Load state |
+| Esc / Ctrl+C / Ctrl+D | Quit |
+
 ## Test
 ```bash
 cargo test
 ```
+
+## Save States
+
+Press **F5** to save and **F9** to load. The state file is written next to
+the ROM as `<rom-name>.state`.
+
+### Autoresume
+
+Pass `--autoresume` to automatically load the state on startup and save it
+on clean exit:
+```bash
+cargo run --release -- mario.nes --autoresume
+```
+The state is only saved on a graceful quit (Esc / Ctrl+C / Ctrl+D); crashes
+will not overwrite it.
+
+## Audio
+
+Audio is enabled by default and played through the system's default output
+device. Pass `--mute` to disable it entirely.
+
+### Remote Audio (for SSH sessions)
+
+SSH has no native audio channel, so when running the emulator on a remote
+host you can forward audio over TCP to a local `listen` process:
+
+1. On your **local machine** (where the speakers are), start a listener:
+   ```bash
+   cargo run --release -- listen --port 9001
+   ```
+2. Connect to the remote host with port forwarding:
+   ```bash
+   ssh -R 9001:localhost:9001 remote-host
+   ```
+3. On the **remote host**, run the emulator with `--stream-audio`:
+   ```bash
+   termnes mario.nes --stream-audio localhost:9001
+   ```
+
+The wire format is raw 32-bit float PCM at 44.1 kHz mono.
 
 ## Terminal Configuration
 
