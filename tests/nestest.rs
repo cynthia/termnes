@@ -16,7 +16,7 @@
 mod common;
 
 use common::try_rom;
-use nes_tui::Nes;
+use termnes::Nes;
 
 #[test]
 fn nestest_automation_official_opcodes() {

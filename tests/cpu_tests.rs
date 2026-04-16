@@ -1,6 +1,6 @@
-use nes_tui::cartridge::Cartridge;
-use nes_tui::bus::Bus;
-use nes_tui::cpu::{Cpu, CpuFlags};
+use termnes::cartridge::Cartridge;
+use termnes::bus::Bus;
+use termnes::cpu::{Cpu, CpuFlags};
 
 /// Helper: builds a minimal iNES ROM (mapper 2, 2 PRG banks = 32KB)
 /// with the given bytes patched into the last bank at offset relative to $C000.

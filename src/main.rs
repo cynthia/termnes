@@ -5,12 +5,12 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 
-use nes_tui::bus::Bus;
-use nes_tui::cartridge::Cartridge;
-use nes_tui::cpu::Cpu;
-use nes_tui::cpu::opcodes::decode;
-use nes_tui::input::JoypadButton;
-use nes_tui::renderer::TuiRenderer;
+use termnes::bus::Bus;
+use termnes::cartridge::Cartridge;
+use termnes::cpu::Cpu;
+use termnes::cpu::opcodes::decode;
+use termnes::input::JoypadButton;
+use termnes::renderer::TuiRenderer;
 
 /// ~60.0988 Hz NTSC frame duration
 const FRAME_DURATION: Duration = Duration::from_micros(16_639);
@@ -29,8 +29,16 @@ fn main() {
     }));
 
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--resize") {
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::SetSize(256, 120)
+        );
+        return;
+    }
+
     if args.len() < 2 {
-        eprintln!("Usage: nes-tui <rom.nes> [--trace] [--trace-log PATH]");
+        eprintln!("Usage: termnes <rom.nes> [--trace] [--trace-log PATH] [--resize]");
         std::process::exit(1);
     }
 
@@ -59,8 +67,8 @@ fn main() {
     eprintln!("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}");
     eprintln!("Controls:");
     eprintln!("  Arrow keys  - D-Pad");
-    eprintln!("  Z           - A button");
-    eprintln!("  X           - B button");
+    eprintln!("  Z           - B button");
+    eprintln!("  X           - A button");
     eprintln!("  A           - Select");
     eprintln!("  S           - Start");
     eprintln!("  Esc         - Quit");
@@ -469,8 +477,8 @@ impl InputState {
 /// Maps a keycode to a joypad button, if any.
 fn key_to_button(code: KeyCode) -> Option<JoypadButton> {
     match code {
-        KeyCode::Char('z') | KeyCode::Char('Z') => Some(JoypadButton::A),
-        KeyCode::Char('x') | KeyCode::Char('X') => Some(JoypadButton::B),
+        KeyCode::Char('z') | KeyCode::Char('Z') => Some(JoypadButton::B),
+        KeyCode::Char('x') | KeyCode::Char('X') => Some(JoypadButton::A),
         KeyCode::Char('a') | KeyCode::Char('A') => Some(JoypadButton::Select),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(JoypadButton::Start),
         KeyCode::Up => Some(JoypadButton::Up),

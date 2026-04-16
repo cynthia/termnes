@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use nes_tui::Nes;
+use termnes::Nes;
 
 /// Absolute path to a ROM name (or subpath) under `tests/test_roms/`.
 pub fn rom_path(name: &str) -> PathBuf {

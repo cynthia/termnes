@@ -1,5 +1,5 @@
-use nes_tui::ppu::palette::NES_PALETTE;
-use nes_tui::ppu::render::*;
+use termnes::ppu::palette::NES_PALETTE;
+use termnes::ppu::render::*;
 
 #[test]
 fn test_palette_has_64_entries() {

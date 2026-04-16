@@ -1,4 +1,4 @@
-use nes_tui::cartridge::Cartridge;
+use termnes::cartridge::Cartridge;
 
 /// Builds a minimal iNES ROM with the given PRG bank count and flags.
 fn make_ines_rom(prg_banks: u8, chr_banks: u8, flags6: u8, flags7: u8) -> Vec<u8> {
@@ -36,7 +36,7 @@ fn test_ines_header_vertical_mirroring() {
     // flags6 bit 0 = 1 => vertical mirroring
     let rom = make_ines_rom(2, 0, 0x21, 0x00);
     let cart = Cartridge::from_ines(&rom).unwrap();
-    assert_eq!(cart.mirroring, nes_tui::ppu::Mirroring::Vertical);
+    assert_eq!(cart.mirroring, termnes::ppu::Mirroring::Vertical);
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn test_ines_header_horizontal_mirroring() {
     // flags6 bit 0 = 0 => horizontal mirroring
     let rom = make_ines_rom(2, 0, 0x20, 0x00);
     let cart = Cartridge::from_ines(&rom).unwrap();
-    assert_eq!(cart.mirroring, nes_tui::ppu::Mirroring::Horizontal);
+    assert_eq!(cart.mirroring, termnes::ppu::Mirroring::Horizontal);
 }
 
 #[test]

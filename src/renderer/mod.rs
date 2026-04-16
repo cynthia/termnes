@@ -67,16 +67,28 @@ impl TuiRenderer {
         loop {
             let (cols, rows) =
                 terminal::size().map_err(|e| format!("Cannot query terminal size: {e}"))?;
+
+            if cols == MIN_COLS && rows == MIN_ROWS {
+                return Ok(());
+            }
+
+            // Attempt to resize to the exact target size.
+            let _ = execute!(io::stdout(), terminal::SetSize(MIN_COLS, MIN_ROWS));
+
+            // If the terminal is at least large enough, we can proceed.
+            // render_frame now handles wider terminals correctly.
             if cols >= MIN_COLS && rows >= MIN_ROWS {
                 return Ok(());
             }
+
             // Carriage-return before each line so the box re-draws cleanly in
             // case the terminal is in cooked mode at this point.
             print!(
                 "\r╔══════════════════════════════════════════════════╗\r\n\
                  ║  NES Emulator requires terminal size: {:3} x {:3}  ║\r\n\
                  ║  Current size: {:3} x {:3}{}║\r\n\
-                 ║  Please resize your terminal window...           ║\r\n\
+                 ║  Please resize your terminal window or run:      ║\r\n\
+                 ║  printf \"\\033[8;{};{}t\"                         ║\r\n\
                  ╚══════════════════════════════════════════════════╝\r",
                 MIN_COLS,
                 MIN_ROWS,
@@ -86,6 +98,8 @@ impl TuiRenderer {
                 " ".repeat(25usize.saturating_sub(
                     cols.to_string().len() + rows.to_string().len()
                 )),
+                MIN_ROWS,
+                MIN_COLS,
             );
             io::stdout().flush().ok();
             std::thread::sleep(Duration::from_millis(200));
@@ -107,8 +121,6 @@ impl TuiRenderer {
     pub fn render_frame(&mut self, framebuffer: &[u8; 256 * 240 * 3]) -> Result<(), String> {
         self.buffer.clear();
 
-        let mut pending_row_move = true; // emit cursor-position before first dirty row
-
         for row in 0..120usize {
             let top_y = row * 2;
             let bot_y = top_y + 1;
@@ -122,16 +134,13 @@ impl TuiRenderer {
             let prev_bot = &self.prev_fb[row_start_bot..row_start_bot + 256 * 3];
 
             if top_slice == prev_top && bot_slice == prev_bot {
-                // Nothing changed in this row — emit cursor move before next dirty row.
-                pending_row_move = true;
+                // Nothing changed in this row
                 continue;
             }
 
-            if pending_row_move {
-                // \x1b[<row>;<col>H  (1-indexed)
-                write!(self.buffer, "\x1b[{};1H", row + 1).unwrap();
-                pending_row_move = false;
-            }
+            // \x1b[<row>;<col>H  (1-indexed). Always move to the start of the 
+            // row to handle terminals wider than 256 columns.
+            write!(self.buffer, "\x1b[{};1H", row + 1).unwrap();
 
             // Emit cells with color-diff optimisation.
             let mut prev_fg = (0u8, 0u8, 0u8);

@@ -5,7 +5,7 @@
 mod common;
 
 use common::{run_blargg, BlarggResult};
-use nes_tui::Nes;
+use termnes::Nes;
 
 /// Wraps 6502 program bytes in a minimal 16 KB NROM iNES image. Program is
 /// placed at CPU $8000 (ROM offset 16); the reset vector is pre-populated.

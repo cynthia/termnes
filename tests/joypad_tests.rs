@@ -1,6 +1,6 @@
-use nes_tui::input::{Joypad, JoypadButton};
-use nes_tui::bus::Bus;
-use nes_tui::cartridge::Cartridge;
+use termnes::input::{Joypad, JoypadButton};
+use termnes::bus::Bus;
+use termnes::cartridge::Cartridge;
 
 #[test]
 fn test_joypad_initial_state() {
