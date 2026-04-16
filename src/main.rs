@@ -5,12 +5,15 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 
+use termnes::audio::AudioOutput;
 use termnes::bus::Bus;
 use termnes::cartridge::Cartridge;
 use termnes::cpu::Cpu;
 use termnes::cpu::opcodes::decode;
 use termnes::input::JoypadButton;
 use termnes::renderer::TuiRenderer;
+
+const AUDIO_SAMPLE_RATE: u32 = 44_100;
 
 /// ~60.0988 Hz NTSC frame duration
 const FRAME_DURATION: Duration = Duration::from_micros(16_639);
@@ -38,10 +41,11 @@ fn main() {
     }
 
     if args.len() < 2 {
-        eprintln!("Usage: termnes <rom.nes> [--trace] [--trace-log PATH] [--resize]");
+        eprintln!("Usage: termnes <rom.nes> [--mute] [--trace] [--trace-log PATH] [--resize]");
         std::process::exit(1);
     }
 
+    let mute = args.iter().any(|a| a == "--mute");
     let trace_mode = args.iter().any(|a| a == "--trace");
     let trace_log_path = args
         .iter()
@@ -78,6 +82,23 @@ fn main() {
     let mut cpu = Cpu::new(bus);
     cpu.reset();
 
+    // Audio setup (non-fatal if it fails)
+    let audio = if mute {
+        None
+    } else {
+        cpu.bus.apu.set_sample_rate(AUDIO_SAMPLE_RATE);
+        match AudioOutput::new(AUDIO_SAMPLE_RATE) {
+            Ok(a) => {
+                eprintln!("Audio: {} Hz", AUDIO_SAMPLE_RATE);
+                Some(a)
+            }
+            Err(e) => {
+                eprintln!("Audio disabled: {}", e);
+                None
+            }
+        }
+    };
+
     if trace_mode {
         eprintln!("Trace mode (headless). Writing to {}", trace_log_path);
         run_trace(&mut cpu, &trace_log_path);
@@ -92,10 +113,10 @@ fn main() {
         }
     };
 
-    run_emulation(&mut cpu, &mut renderer);
+    run_emulation(&mut cpu, &mut renderer, audio.as_ref());
 }
 
-fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer) {
+fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>) {
     eprintln!("Emulation started. Press Esc or Ctrl+C to quit.");
     let mut frame_count: u64 = 0;
     let mut input = InputState::new(renderer.has_keyboard_enhancement);
@@ -135,6 +156,12 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer) {
             // eprintln!("Frames completed: {}", frame_count);
         }
 
+        // Drain audio samples and send to output device
+        if let Some(audio) = audio {
+            let samples = cpu.bus.apu.drain_samples();
+            audio.queue_samples(&samples);
+        }
+
         // Render the frame
         if let Err(e) = renderer.render_frame(&cpu.bus.ppu.framebuffer) {
             eprintln!("Render error: {}", e);
@@ -149,10 +176,19 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer) {
         // events still "unpress" held buttons.
         input.tick_frame(cpu);
 
-        // Frame timing — sleep to maintain ~60fps
-        let elapsed = frame_start.elapsed();
-        if elapsed < FRAME_DURATION {
-            std::thread::sleep(FRAME_DURATION - elapsed);
+        // Frame timing — use audio buffer level as master clock when audio
+        // is active; fall back to wall-clock sleep otherwise.
+        // Target ~3 frames of audio buffered (~50 ms latency at 44.1 kHz).
+        if let Some(audio) = audio {
+            const TARGET_SAMPLES: usize = 44_100 / 60 * 3; // ~2205
+            while audio.buffered_samples() > TARGET_SAMPLES {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        } else {
+            let elapsed = frame_start.elapsed();
+            if elapsed < FRAME_DURATION {
+                std::thread::sleep(FRAME_DURATION - elapsed);
+            }
         }
     }
 }

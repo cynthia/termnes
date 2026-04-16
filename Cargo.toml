@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 crossterm = "0.28"
 bitflags = "2"
+cpal = "0.15"
