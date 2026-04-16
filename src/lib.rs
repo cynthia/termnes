@@ -6,6 +6,7 @@ pub mod cpu;
 pub mod input;
 pub mod ppu;
 pub mod renderer;
+pub mod savestate;
 
 use std::path::Path;
 

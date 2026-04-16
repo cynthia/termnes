@@ -7,3 +7,5 @@ edition = "2024"
 crossterm = "0.28"
 bitflags = "2"
 cpal = "0.15"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
