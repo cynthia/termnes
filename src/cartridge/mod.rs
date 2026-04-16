@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::ppu::Mirroring;
-use mapper::{Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, NromMapper, UnromMapper};
+use mapper::{CnromMapper, Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, NromMapper, UnromMapper};
 
 pub struct Cartridge {
     pub prg_rom: Vec<u8>,
@@ -68,6 +68,7 @@ impl Cartridge {
             0 => Box::new(NromMapper::new(prg_rom.clone(), chr_rom.clone(), mirroring)),
             1 => Box::new(Mmc1Mapper::new(prg_rom.clone(), chr_rom.clone())),
             2 => Box::new(UnromMapper::new(prg_rom.clone(), mirroring)),
+            3 => Box::new(CnromMapper::new(prg_rom.clone(), chr_rom.clone(), mirroring)),
             4 => Box::new(Mmc3Mapper::new(prg_rom.clone(), chr_rom.clone())),
             9 => Box::new(Mmc2Mapper::new(prg_rom.clone(), chr_rom.clone())),
             _ => return Err(format!("Unsupported mapper: {}", mapper_id)),
@@ -326,5 +327,38 @@ mod tests {
         let rom = make_ines(0, 1, 0, 0, 0, 0);
         let cart = Cartridge::from_ines(&rom).unwrap();
         assert!(cart.rom_path.is_none());
+    }
+
+    // ── CNROM via Cartridge ─────────────────────────────────────────────────
+
+    #[test]
+    fn cnrom_chr_bank_switch_via_cartridge() {
+        // Build a mapper-3 ROM with 2 CHR banks
+        let mut rom = Vec::new();
+        rom.extend_from_slice(b"NES\x1A");
+        rom.push(1);    // 1 PRG bank
+        rom.push(2);    // 2 CHR banks
+        rom.push(0x30); // flags6: mapper 3
+        rom.push(0x00);
+        rom.extend_from_slice(&[0u8; 8]);
+        rom.extend(vec![0xAA; 0x4000]); // PRG
+        // CHR bank 0: filled with 0x10
+        rom.extend(vec![0x10; 0x2000]);
+        // CHR bank 1: filled with 0x20
+        rom.extend(vec![0x20; 0x2000]);
+
+        let mut cart = Cartridge::from_ines(&rom).unwrap();
+        assert_eq!(cart.mapper_id, 3);
+
+        // Default: CHR bank 0
+        assert_eq!(cart.chr_read(0x0000), 0x10);
+
+        // Switch to CHR bank 1
+        cart.cpu_write(0x8000, 1);
+        assert_eq!(cart.chr_read(0x0000), 0x20);
+
+        // PRG mirrored
+        assert_eq!(cart.cpu_read(0x8000), Some(0xAA));
+        assert_eq!(cart.cpu_read(0xC000), Some(0xAA));
     }
 }

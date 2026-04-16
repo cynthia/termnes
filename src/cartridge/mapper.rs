@@ -131,6 +131,65 @@ impl Mapper for UnromMapper {
     }
 }
 
+/// CNROM (Mapper 3) — switches 8KB CHR-ROM banks, fixed PRG-ROM.
+/// Writing any value to $8000-$FFFF selects the CHR bank.
+/// PRG-ROM is either 16KB (mirrored) or 32KB.
+pub struct CnromMapper {
+    prg_rom: Vec<u8>,
+    chr_rom: Vec<u8>,
+    bank_select: usize,
+    num_chr_banks: usize,
+    mirroring: Mirroring,
+}
+
+impl CnromMapper {
+    pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
+        let num_chr_banks = (chr_rom.len() / 0x2000).max(1);
+        Self {
+            prg_rom,
+            chr_rom,
+            bank_select: 0,
+            num_chr_banks,
+            mirroring,
+        }
+    }
+}
+
+impl Mapper for CnromMapper {
+    fn cpu_read(&self, addr: u16) -> Option<u8> {
+        match addr {
+            0x8000..=0xFFFF => {
+                let offset = (addr as usize - 0x8000) % self.prg_rom.len();
+                Some(self.prg_rom[offset])
+            }
+            _ => None,
+        }
+    }
+
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        if addr >= 0x8000 {
+            self.bank_select = (val as usize) % self.num_chr_banks;
+        }
+    }
+
+    fn chr_read(&self, addr: u16) -> Option<u8> {
+        if addr < 0x2000 {
+            let offset = self.bank_select * 0x2000 + addr as usize;
+            Some(self.chr_rom[offset])
+        } else {
+            None
+        }
+    }
+
+    fn chr_write(&mut self, _addr: u16, _val: u8) {
+        // CHR-ROM is not writable
+    }
+
+    fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
+}
+
 /// MMC1 (Mapper 1) — dynamic bank switching for PRG and CHR.
 /// Supports 16KB or 32KB PRG banks, 4KB or 8KB CHR banks.
 /// Includes 8KB PRG RAM at $6000-$7FFF.
@@ -715,6 +774,78 @@ mod tests {
         let prg = vec![0u8; 2 * 0x4000];
         let m = UnromMapper::new(prg, Mirroring::Horizontal);
         assert_eq!(m.chr_read(0x2000), None);
+    }
+
+    // ── CNROM ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn cnrom_prg_read_16kb_mirrors() {
+        let prg = vec![0x42; 0x4000]; // 16KB
+        let chr = vec![0; 4 * 0x2000]; // 4 CHR banks
+        let m = CnromMapper::new(prg, chr, Mirroring::Horizontal);
+        assert_eq!(m.cpu_read(0x8000), Some(0x42));
+        assert_eq!(m.cpu_read(0xC000), Some(0x42)); // mirrors
+    }
+
+    #[test]
+    fn cnrom_prg_read_32kb() {
+        let mut prg = vec![0x11; 0x4000];
+        prg.extend(vec![0x22; 0x4000]);
+        let chr = vec![0; 0x2000];
+        let m = CnromMapper::new(prg, chr, Mirroring::Vertical);
+        assert_eq!(m.cpu_read(0x8000), Some(0x11));
+        assert_eq!(m.cpu_read(0xC000), Some(0x22));
+    }
+
+    #[test]
+    fn cnrom_chr_bank_switching() {
+        let mut chr = vec![0u8; 4 * 0x2000]; // 4 banks of 8KB
+        for bank in 0..4 {
+            for b in &mut chr[bank * 0x2000..(bank + 1) * 0x2000] {
+                *b = bank as u8;
+            }
+        }
+        let prg = vec![0; 0x4000];
+        let mut m = CnromMapper::new(prg, chr, Mirroring::Horizontal);
+
+        // Default: bank 0
+        assert_eq!(m.chr_read(0x0000), Some(0));
+
+        // Switch to bank 2
+        m.cpu_write(0x8000, 2);
+        assert_eq!(m.chr_read(0x0000), Some(2));
+        assert_eq!(m.chr_read(0x1FFF), Some(2));
+
+        // Switch to bank 3
+        m.cpu_write(0xFFFF, 3);
+        assert_eq!(m.chr_read(0x0000), Some(3));
+    }
+
+    #[test]
+    fn cnrom_chr_bank_wraps() {
+        let chr = vec![0; 2 * 0x2000]; // 2 banks
+        let prg = vec![0; 0x4000];
+        let mut m = CnromMapper::new(prg, chr, Mirroring::Horizontal);
+        m.cpu_write(0x8000, 5); // 5 % 2 = 1
+        assert_eq!(m.chr_read(0x0000), Some(0)); // bank 1 is all zeros (same fill)
+    }
+
+    #[test]
+    fn cnrom_chr_not_writable() {
+        let chr = vec![0; 0x2000];
+        let prg = vec![0; 0x4000];
+        let mut m = CnromMapper::new(prg, chr, Mirroring::Horizontal);
+        m.chr_write(0x0000, 0xFF);
+        assert_eq!(m.chr_read(0x0000), Some(0)); // CHR-ROM, not writable
+    }
+
+    #[test]
+    fn cnrom_out_of_range() {
+        let chr = vec![0; 0x2000];
+        let prg = vec![0; 0x4000];
+        let m = CnromMapper::new(prg, chr, Mirroring::Horizontal);
+        assert_eq!(m.chr_read(0x2000), None);
+        assert_eq!(m.cpu_read(0x6000), None);
     }
 
     // ── MMC1 ────────────────────────────────────────────────────────────────
