@@ -24,6 +24,7 @@ pub mod mmc3;
 pub mod axrom;
 pub mod mmc5;
 pub mod vrc6;
+pub mod sunsoft_fme7;
 
 pub use nrom::NromMapper;
 pub use unrom::UnromMapper;
@@ -34,3 +35,4 @@ pub use mmc3::Mmc3Mapper;
 pub use axrom::AxromMapper;
 pub use mmc5::Mmc5Mapper;
 pub use vrc6::{Vrc6Mapper, Vrc6Variant};
+pub use sunsoft_fme7::SunsoftFme7Mapper;

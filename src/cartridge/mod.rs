@@ -3,7 +3,7 @@ pub mod mapper;
 use crate::ppu::Mirroring;
 use std::fs::File;
 use std::io::Read;
-use mapper::{AxromMapper, CnromMapper, Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, Mmc5Mapper, NromMapper, Vrc6Mapper, Vrc6Variant, UnromMapper};
+use mapper::{AxromMapper, CnromMapper, Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, Mmc5Mapper, NromMapper, Vrc6Mapper, Vrc6Variant, SunsoftFme7Mapper, UnromMapper};
 
 pub struct Cartridge {
     pub mapper_id: u8,
@@ -65,6 +65,7 @@ impl Cartridge {
             9 => Box::new(Mmc2Mapper::new(prg_rom.clone(), chr_rom.clone())),
             24 => Box::new(Vrc6Mapper::new(prg_rom.clone(), chr_rom.clone(), Vrc6Variant::Vrc6a)),
             26 => Box::new(Vrc6Mapper::new(prg_rom.clone(), chr_rom.clone(), Vrc6Variant::Vrc6b)),
+            69 => Box::new(SunsoftFme7Mapper::new(prg_rom.clone(), chr_rom.clone())),
             _ => return Err(format!("Unsupported mapper: {}", mapper_id)),
         };
 

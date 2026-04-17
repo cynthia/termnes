@@ -180,6 +180,18 @@ pub enum MapperState {
         irq_enable_after_ack: bool,
         irq_pending: bool,
     },
+    SunsoftFme7 {
+        command: u8,
+        chr_banks: Vec<usize>,
+        prg_banks: Vec<usize>,
+        prg_ram_enable: bool,
+        prg_ram_select: bool,
+        mirroring: u8,
+        irq_counter: u16,
+        irq_enable: bool,
+        irq_counter_enable: bool,
+        irq_pending: bool,
+    },
     Unrom {
         bank_select: usize,
         chr_ram: Vec<u8>,
