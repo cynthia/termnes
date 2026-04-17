@@ -43,6 +43,9 @@ impl Nes {
                     for _ in 0..3 {
                         self.cpu.bus.ppu.tick(&mut self.cpu.bus.cartridge);
                     }
+                    self.cpu.bus.cartridge.tick_cpu();
+                    let expansion_audio = self.cpu.bus.cartridge.expansion_audio_sample();
+                    self.cpu.bus.apu.set_expansion_audio_input(expansion_audio);
                     self.cpu.bus.apu.tick(1);
                 }
                 if self.cpu.bus.poll_nmi() {

@@ -7,6 +7,8 @@ use super::Mapper;
 pub struct SunsoftFme7Mapper {
     prg_rom: Vec<u8>,
     chr_rom: Vec<u8>,
+    chr_ram: [u8; 8192],
+    chr_is_ram: bool,
     prg_ram: [u8; 8192],
 
     command: u8,
@@ -25,13 +27,16 @@ pub struct SunsoftFme7Mapper {
 
 impl SunsoftFme7Mapper {
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>) -> Self {
+        let chr_is_ram = chr_rom.is_empty();
         Self {
             prg_rom,
             chr_rom,
+            chr_ram: [0; 8192],
+            chr_is_ram,
             prg_ram: [0; 8192],
             command: 0,
             chr_banks: [0; 8],
-            prg_banks: [0; 4],
+            prg_banks: [0, 0, 1, 2],
             prg_ram_enable: false,
             prg_ram_select: false,
             mirroring: Mirroring::Vertical,
@@ -53,12 +58,14 @@ impl Mapper for SunsoftFme7Mapper {
     fn cpu_read(&self, addr: u16) -> Option<u8> {
         match addr {
             0x6000..=0x7FFF => {
-                if self.prg_ram_enable && self.prg_ram_select {
-                    Some(self.prg_ram[addr as usize - 0x6000])
-                } else if self.prg_ram_enable && !self.prg_ram_select {
-                    Some(self.prg_read_8k(self.prg_banks[0], addr as usize - 0x6000))
+                if self.prg_ram_select {
+                    if self.prg_ram_enable {
+                        Some(self.prg_ram[addr as usize - 0x6000])
+                    } else {
+                        Some(0)
+                    }
                 } else {
-                    Some(0)
+                    Some(self.prg_read_8k(self.prg_banks[0], addr as usize - 0x6000))
                 }
             }
             0x8000..=0x9FFF => Some(self.prg_read_8k(self.prg_banks[1], addr as usize - 0x8000)),
@@ -77,7 +84,7 @@ impl Mapper for SunsoftFme7Mapper {
     fn cpu_write(&mut self, addr: u16, val: u8) {
         match addr {
             0x6000..=0x7FFF => {
-                if self.prg_ram_enable && self.prg_ram_select {
+                if self.prg_ram_select && self.prg_ram_enable {
                     self.prg_ram[addr as usize - 0x6000] = val;
                 }
             }
@@ -124,6 +131,9 @@ impl Mapper for SunsoftFme7Mapper {
 
     fn chr_read(&self, addr: u16) -> Option<u8> {
         if addr >= 0x2000 { return None; }
+        if self.chr_is_ram {
+            return Some(self.chr_ram[addr as usize]);
+        }
         let num_banks = self.chr_rom.len() / 0x0400;
         if num_banks == 0 { return Some(0); }
 
@@ -132,30 +142,27 @@ impl Mapper for SunsoftFme7Mapper {
         Some(self.chr_rom[offset])
     }
 
-    fn chr_write(&mut self, _addr: u16, _val: u8) {}
+    fn chr_write(&mut self, addr: u16, val: u8) {
+        if addr < 0x2000 && self.chr_is_ram {
+            self.chr_ram[addr as usize] = val;
+        }
+    }
 
     fn mirroring(&self) -> Mirroring {
         self.mirroring
     }
 
-    // Sunsoft FME-7 IRQ counter clocks on every CPU cycle.
-    // The emulator ticks the APU once per CPU cycle, and Mapper doesn't have a direct CPU tick method.
-    // But `tick_scanline` fires once per scanline (113.66 CPU cycles).
-    // Wait, `Mapper` trait doesn't currently expose a cycle tick, only scanline tick.
-    // Let's implement an approximation for now, or assume it's good enough to tick 114 times per scanline.
-    fn tick_scanline(&mut self) {
-        if self.irq_counter_enable {
-            // Approximate CPU cycles per scanline
-            for _ in 0..114 {
-                if self.irq_counter == 0 {
-                    self.irq_counter = 0xFFFF;
-                    if self.irq_enable {
-                        self.irq_pending = true;
-                    }
-                } else {
-                    self.irq_counter -= 1;
-                }
+    fn tick_cpu(&mut self) {
+        if !self.irq_counter_enable {
+            return;
+        }
+        if self.irq_counter == 0 {
+            self.irq_counter = 0xFFFF;
+            if self.irq_enable {
+                self.irq_pending = true;
             }
+        } else {
+            self.irq_counter -= 1;
         }
     }
 

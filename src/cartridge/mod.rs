@@ -1,9 +1,12 @@
 pub mod mapper;
 
 use crate::ppu::Mirroring;
+use mapper::{
+    AxromMapper, CnromMapper, Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, Mmc5Mapper, NromMapper,
+    SunsoftFme7Mapper, UnromMapper, Vrc6Mapper, Vrc6Variant,
+};
 use std::fs::File;
 use std::io::Read;
-use mapper::{AxromMapper, CnromMapper, Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, Mmc5Mapper, NromMapper, Vrc6Mapper, Vrc6Variant, SunsoftFme7Mapper, UnromMapper};
 
 pub struct Cartridge {
     pub mapper_id: u8,
@@ -58,13 +61,25 @@ impl Cartridge {
             0 => Box::new(NromMapper::new(prg_rom.clone(), chr_rom.clone(), mirroring)),
             1 => Box::new(Mmc1Mapper::new(prg_rom.clone(), chr_rom.clone())),
             2 => Box::new(UnromMapper::new(prg_rom.clone(), mirroring)),
-            3 => Box::new(CnromMapper::new(prg_rom.clone(), chr_rom.clone(), mirroring)),
+            3 => Box::new(CnromMapper::new(
+                prg_rom.clone(),
+                chr_rom.clone(),
+                mirroring,
+            )),
             4 => Box::new(Mmc3Mapper::new(prg_rom.clone(), chr_rom.clone())),
             5 => Box::new(Mmc5Mapper::new(prg_rom.clone(), chr_rom.clone())),
             7 => Box::new(AxromMapper::new(prg_rom.clone())),
             9 => Box::new(Mmc2Mapper::new(prg_rom.clone(), chr_rom.clone())),
-            24 => Box::new(Vrc6Mapper::new(prg_rom.clone(), chr_rom.clone(), Vrc6Variant::Vrc6a)),
-            26 => Box::new(Vrc6Mapper::new(prg_rom.clone(), chr_rom.clone(), Vrc6Variant::Vrc6b)),
+            24 => Box::new(Vrc6Mapper::new(
+                prg_rom.clone(),
+                chr_rom.clone(),
+                Vrc6Variant::Vrc6a,
+            )),
+            26 => Box::new(Vrc6Mapper::new(
+                prg_rom.clone(),
+                chr_rom.clone(),
+                Vrc6Variant::Vrc6b,
+            )),
             69 => Box::new(SunsoftFme7Mapper::new(prg_rom.clone(), chr_rom.clone())),
             _ => return Err(format!("Unsupported mapper: {}", mapper_id)),
         };
@@ -87,7 +102,8 @@ impl Cartridge {
     pub fn from_file(path: &str) -> Result<Self, String> {
         let mut file = File::open(path).map_err(|e| format!("Failed to open ROM: {}", e))?;
         let mut data = Vec::new();
-        file.read_to_end(&mut data).map_err(|e| format!("Failed to read ROM: {}", e))?;
+        file.read_to_end(&mut data)
+            .map_err(|e| format!("Failed to read ROM: {}", e))?;
         let mut cart = Self::new(&data)?;
         cart.path = Some(path.to_string());
         Ok(cart)
@@ -125,6 +141,14 @@ impl Cartridge {
         self.mapper.tick_scanline();
     }
 
+    pub fn tick_cpu(&mut self) {
+        self.mapper.tick_cpu();
+    }
+
+    pub fn expansion_audio_sample(&self) -> f32 {
+        self.mapper.expansion_audio_sample()
+    }
+
     pub fn check_irq(&self) -> bool {
         self.mapper.check_irq()
     }
@@ -154,9 +178,10 @@ mod tests {
         rom.push(prg_banks);
         rom.push(chr_banks);
 
-        let flags6_extra = (mirroring_flag & 0x01) | ((battery_flag & 0x01) << 1) | ((trainer_flag & 0x01) << 2);
+        let flags6_extra =
+            (mirroring_flag & 0x01) | ((battery_flag & 0x01) << 1) | ((trainer_flag & 0x01) << 2);
         rom.push((mapper_id << 4) | flags6_extra); // flags6: lower nibble of mapper in bits 4-7
-        rom.push(mapper_id & 0xF0);                // flags7: upper nibble of mapper in bits 4-7
+        rom.push(mapper_id & 0xF0); // flags7: upper nibble of mapper in bits 4-7
 
         rom.extend(vec![0; 8]); // padding
 

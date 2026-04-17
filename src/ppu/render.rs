@@ -26,7 +26,6 @@ struct SpriteRow {
 
 impl Ppu {
     /// Advance the PPU by one cycle. Called 3× per CPU cycle.
-    /// Advance the PPU by one cycle. Called 3× per CPU cycle.
     pub fn tick(&mut self, cartridge: &mut Cartridge) {
         // ── Flag management at specific dots ────────────────────────────────
         if self.scanline == VBLANK_SCANLINE as i16 && self.cycle == 1 {
@@ -53,11 +52,20 @@ impl Ppu {
         let visible = self.scanline >= 0 && self.scanline < SCREEN_HEIGHT as i16;
         let pre_render = self.scanline == -1;
 
-        // Render at dot 256 using the start-of-scanline `v` snapshot.
+        if self.cycle == 0 && visible {
+            self.render_fine_x = self.fine_x;
+        }
+        if rendering && !self.render_was_enabled && visible {
+            self.vram_addr = self.temp_vram_addr;
+            self.render_fine_x = self.fine_x;
+        }
+        self.render_was_enabled = rendering;
+
+        if visible && self.cycle >= 1 && self.cycle <= 256 {
+            self.render_pixel(self.scanline, self.cycle - 1, cartridge);
+        }
+
         if self.cycle == 256 {
-            if visible {
-                self.render_scanline(self.scanline, cartridge);
-            }
             if rendering && (visible || pre_render) {
                 self.increment_coarse_y();
             }
@@ -90,6 +98,159 @@ impl Ppu {
         if self.odd_frame && self.scanline == -1 && self.cycle == 340 && rendering {
             self.cycle = 0;
             self.scanline = 0;
+        }
+    }
+
+    fn increment_render_coarse_x(&mut self) {
+        if (self.vram_addr & 0x001F) == 31 {
+            self.vram_addr &= !0x001F;
+            self.vram_addr ^= 0x0400;
+        } else {
+            self.vram_addr += 1;
+        }
+    }
+
+    fn bg_pixel(&self, x: u16, cartridge: &Cartridge) -> (u8, u8) {
+        if self.mask & 0x08 == 0 || (x < 8 && self.mask & 0x02 == 0) {
+            return (0, 0);
+        }
+
+        let nt_addr = 0x2000 | (self.vram_addr & 0x0FFF);
+        let tile_idx = self.ppu_read(nt_addr, cartridge) as u16;
+
+        let attr_addr = 0x23C0
+            | (self.vram_addr & 0x0C00)
+            | ((self.vram_addr >> 4) & 0x38)
+            | ((self.vram_addr >> 2) & 0x07);
+        let attr = self.ppu_read(attr_addr, cartridge);
+        let shift = ((self.vram_addr >> 4) & 4) | (self.vram_addr & 2);
+        let palette = ((attr >> shift) & 0x03) as u8;
+
+        let fine_y = (self.vram_addr >> 12) & 0x07;
+        let bg_pt_base: u16 = if self.ctrl & 0x10 != 0 { 0x1000 } else { 0x0000 };
+        let pt_addr = bg_pt_base + tile_idx * 16 + fine_y;
+        let lo = self.ppu_read(pt_addr, cartridge);
+        let hi = self.ppu_read(pt_addr + 8, cartridge);
+        let bit = 7 - self.render_fine_x;
+        let color = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
+        (color, palette)
+    }
+
+    fn sprite_pixel(&mut self, scanline: i16, x: u16, cartridge: &Cartridge) -> (u8, u8, bool, bool, Option<Sprite0Debug>) {
+        if self.mask & 0x10 == 0 || (x < 8 && self.mask & 0x04 == 0) {
+            return (0, 0, false, false, None);
+        }
+
+        let spr_pt_base: u16 = if self.ctrl & 0x08 != 0 { 0x1000 } else { 0x0000 };
+        let sprites = self.collect_sprites(scanline, spr_pt_base, cartridge);
+        let mut debug = None;
+
+        for spr in sprites.iter() {
+            let sx = x as i16 - spr.x as i16;
+            if !(0..8).contains(&sx) {
+                continue;
+            }
+
+            let bit = if spr.flip_h { sx as u8 } else { 7 - sx as u8 };
+            let lo = (spr.lo >> bit) & 1;
+            let hi = (spr.hi >> bit) & 1;
+            let color = (hi << 1) | lo;
+            if color == 0 {
+                continue;
+            }
+
+            if spr.is_sprite0 {
+                debug = Some(Sprite0Debug {
+                    scanline,
+                    oam_y: spr.oam_y,
+                    oam_tile: spr.oam_tile,
+                    oam_attr: spr.oam_attr,
+                    oam_x: spr.x,
+                    row_used: spr.row_used,
+                    lo: spr.lo,
+                    hi: spr.hi,
+                    mask_at_check: self.mask,
+                    bg_enabled: self.mask & 0x08 != 0,
+                    spr_enabled: self.mask & 0x10 != 0,
+                    had_opaque: true,
+                    first_opaque_x: x,
+                    had_opaque_bg_at_opaque_spr: false,
+                    fired: false,
+                });
+            }
+
+            return (color, spr.palette, spr.behind_bg, spr.is_sprite0, debug);
+        }
+
+        (0, 0, false, false, None)
+    }
+
+    fn render_pixel(&mut self, scanline: i16, x: u16, cartridge: &Cartridge) {
+        let y = scanline as u16;
+        let (bg_color, bg_pal) = self.bg_pixel(x, cartridge);
+        let (spr_color, spr_pal, spr_behind, is_spr0, mut spr0_dbg) =
+            self.sprite_pixel(scanline, x, cartridge);
+
+        if let Some(dbg) = spr0_dbg.as_mut() {
+            self.dbg_sprite0_collected += 1;
+            self.dbg_sprite0_opaque_scanlines += 1;
+            if bg_color != 0 {
+                dbg.had_opaque_bg_at_opaque_spr = true;
+            } else {
+                self.dbg_sprite0_opaque_but_bg_transparent += 1;
+            }
+        }
+
+        if is_spr0 && spr_color != 0 && bg_color != 0 && x < 255 {
+            self.status |= 0x40;
+            if let Some(dbg) = spr0_dbg.as_mut() {
+                dbg.had_opaque_bg_at_opaque_spr = true;
+                dbg.fired = true;
+                self.dbg_sprite0_hits += 1;
+                self.dbg_last_sprite0_hit = Some(*dbg);
+            }
+        }
+
+        if let Some(dbg) = spr0_dbg {
+            self.dbg_last_sprite0 = Some(dbg);
+        }
+
+        let (pal_base, final_color) = if spr_color != 0 && (!spr_behind || bg_color == 0) {
+            (0x3F10 + (spr_pal as u16) * 4, spr_color)
+        } else if bg_color != 0 {
+            (0x3F00 + (bg_pal as u16) * 4, bg_color)
+        } else {
+            (0x3F00, 0u8)
+        };
+
+        let pal_addr = if final_color == 0 {
+            0x3F00u16
+        } else {
+            pal_base + final_color as u16
+        };
+        let entry = self.ppu_read(pal_addr, cartridge) & 0x3F;
+        let (mut r, mut g, mut b) = crate::ppu::palette::NES_PALETTE[entry as usize];
+        if self.mask & 0xE0 != 0 {
+            let emp_r = self.mask & 0x20 != 0;
+            let emp_g = self.mask & 0x40 != 0;
+            let emp_b = self.mask & 0x80 != 0;
+
+            if !emp_r { r = r.saturating_sub(r / 4); }
+            if !emp_g { g = g.saturating_sub(g / 4); }
+            if !emp_b { b = b.saturating_sub(b / 4); }
+        }
+
+        let i = (y as usize * SCREEN_WIDTH + x as usize) * 3;
+        self.framebuffer[i] = r;
+        self.framebuffer[i + 1] = g;
+        self.framebuffer[i + 2] = b;
+
+        if self.mask & 0x18 != 0 {
+            self.render_fine_x += 1;
+            if self.render_fine_x >= 8 {
+                self.render_fine_x = 0;
+                self.increment_render_coarse_x();
+            }
         }
     }
 

@@ -90,7 +90,9 @@ impl Cpu {
     }
 
     /// Non-maskable interrupt: pushes PC and status, loads vector at $FFFA-$FFFB.
+    /// Takes 7 cycles total: 2 internal + 3 stack writes (via push) + 2 vector reads.
     pub fn nmi(&mut self) {
+        self.bus.tick(2);
         self.push_u16(self.pc);
         // BREAK clear, UNUSED set when pushed by NMI/IRQ
         self.push(self.status.bits() & !0x10 | 0x20);
@@ -98,22 +100,22 @@ impl Cpu {
         let lo = self.bus.cpu_read(0xFFFA) as u16;
         let hi = self.bus.cpu_read(0xFFFB) as u16;
         self.pc = (hi << 8) | lo;
-        self.bus.tick(7);
         self.total_cycles += 7;
     }
 
     /// Maskable interrupt. No-ops if IRQ_DIS is set.
+    /// Takes 7 cycles total: 2 internal + 3 stack writes + 2 vector reads.
     pub fn irq(&mut self) {
         if self.status.contains(CpuFlags::IRQ_DIS) {
             return;
         }
+        self.bus.tick(2);
         self.push_u16(self.pc);
         self.push(self.status.bits() & !0x10 | 0x20);
         self.status.insert(CpuFlags::IRQ_DIS);
         let lo = self.bus.cpu_read(0xFFFE) as u16;
         let hi = self.bus.cpu_read(0xFFFF) as u16;
         self.pc = (hi << 8) | lo;
-        self.bus.tick(7);
         self.total_cycles += 7;
     }
 

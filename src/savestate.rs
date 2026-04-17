@@ -174,11 +174,24 @@ pub enum MapperState {
         prg_bank_8k: usize,
         chr_banks: Vec<usize>,
         mirroring: u8,
+        audio_control: u8,
+        pulse1_regs: Vec<u8>,
+        pulse1_timer: u16,
+        pulse1_step: u8,
+        pulse2_regs: Vec<u8>,
+        pulse2_timer: u16,
+        pulse2_step: u8,
+        saw_regs: Vec<u8>,
+        saw_timer: u16,
+        saw_step: u8,
+        saw_accumulator: u8,
         irq_latch: u8,
         irq_counter: u8,
+        irq_mode_cycle: bool,
         irq_enable: bool,
         irq_enable_after_ack: bool,
         irq_pending: bool,
+        irq_prescaler: i16,
     },
     SunsoftFme7 {
         command: u8,
@@ -264,8 +277,8 @@ impl SaveState {
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
-        let state: Self =
-            bincode::deserialize(data).map_err(|e| format!("Failed to deserialize save state: {e}"))?;
+        let state: Self = bincode::deserialize(data)
+            .map_err(|e| format!("Failed to deserialize save state: {e}"))?;
         if &state.magic != SAVE_STATE_MAGIC {
             return Err("Not a valid save state file".into());
         }

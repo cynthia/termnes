@@ -11,7 +11,7 @@ pub struct Bus {
     pub cartridge: Cartridge,
     pub joypad1: Joypad,
     pub joypad2: Joypad,
-    prg_ram: [u8; 8192],   // $6000-$7FFF battery-backed RAM
+    prg_ram: [u8; 8192], // $6000-$7FFF battery-backed RAM
     dma_page: u8,
     dma_active: bool,
     dma_addr: u8,
@@ -46,8 +46,12 @@ impl Bus {
             0x4015 => self.apu.read_status(),
             0x4016 => self.joypad1.read(),
             0x4017 => self.joypad2.read(),
-            0x4000..=0x4013 | 0x4018..=0x5FFF => 0, // APU/expansion stubs
-            0x6000..=0x7FFF => self.prg_ram[(addr - 0x6000) as usize],
+            0x4000..=0x4013 => 0,
+            0x4018..=0x5FFF => self.cartridge.cpu_read(addr).unwrap_or(0),
+            0x6000..=0x7FFF => self
+                .cartridge
+                .cpu_read(addr)
+                .unwrap_or(self.prg_ram[(addr - 0x6000) as usize]),
             0x8000..=0xFFFF => self.cartridge.cpu_read(addr).unwrap_or(0),
         }
     }
@@ -70,8 +74,11 @@ impl Bus {
             }
             0x4017 => self.apu.write_frame_counter(val, self.total_cycles),
             0x4000..=0x4013 => self.apu.write_register(addr, val),
-            0x4018..=0x5FFF => {} // expansion ROM stubs
-            0x6000..=0x7FFF => self.prg_ram[(addr - 0x6000) as usize] = val,
+            0x4018..=0x5FFF => self.cartridge.cpu_write(addr, val),
+            0x6000..=0x7FFF => {
+                self.prg_ram[(addr - 0x6000) as usize] = val;
+                self.cartridge.cpu_write(addr, val);
+            }
             0x8000..=0xFFFF => self.cartridge.cpu_write(addr, val),
         }
     }
@@ -94,6 +101,9 @@ impl Bus {
             self.ppu.tick(&mut self.cartridge);
             self.ppu.tick(&mut self.cartridge);
             self.ppu.tick(&mut self.cartridge);
+            self.cartridge.tick_cpu();
+            let expansion_audio = self.cartridge.expansion_audio_sample();
+            self.apu.set_expansion_audio_input(expansion_audio);
             self.apu.tick(1);
 
             if self.apu.dmc.dma_request {
@@ -122,7 +132,10 @@ impl Bus {
             // Internal access to avoid double-tick in cpu_read/write
             let val = match base + i {
                 0x0000..=0x1FFF => self.cpu_ram[((base + i) & 0x07FF) as usize],
-                0x6000..=0x7FFF => self.prg_ram[(base + i - 0x6000) as usize],
+                0x6000..=0x7FFF => self
+                    .cartridge
+                    .cpu_read(base + i)
+                    .unwrap_or(self.prg_ram[(base + i - 0x6000) as usize]),
                 0x8000..=0xFFFF => self.cartridge.cpu_read(base + i).unwrap_or(0),
                 _ => 0,
             };
@@ -143,7 +156,11 @@ impl Bus {
     pub fn peek(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x1FFF => self.cpu_ram[(addr & 0x07FF) as usize],
-            0x6000..=0x7FFF => self.prg_ram[(addr - 0x6000) as usize],
+            0x4018..=0x5FFF => self.cartridge.cpu_read(addr).unwrap_or(0),
+            0x6000..=0x7FFF => self
+                .cartridge
+                .cpu_read(addr)
+                .unwrap_or(self.prg_ram[(addr - 0x6000) as usize]),
             0x8000..=0xFFFF => self.cartridge.cpu_read(addr).unwrap_or(0),
             _ => 0,
         }
@@ -179,7 +196,11 @@ impl Bus {
                         eprintln!("Loaded save: {}", path.display());
                     }
                     Ok(data) => {
-                        eprintln!("Save file wrong size ({}), ignoring: {}", data.len(), path.display());
+                        eprintln!(
+                            "Save file wrong size ({}), ignoring: {}",
+                            data.len(),
+                            path.display()
+                        );
                     }
                     Err(e) => {
                         eprintln!("Failed to load save: {}", e);
@@ -214,8 +235,12 @@ impl Bus {
     }
 
     pub fn restore_state(&mut self, s: &BusState) {
-        if s.cpu_ram.len() == self.cpu_ram.len() { self.cpu_ram.copy_from_slice(&s.cpu_ram); }
-        if s.prg_ram.len() == self.prg_ram.len() { self.prg_ram.copy_from_slice(&s.prg_ram); }
+        if s.cpu_ram.len() == self.cpu_ram.len() {
+            self.cpu_ram.copy_from_slice(&s.cpu_ram);
+        }
+        if s.prg_ram.len() == self.prg_ram.len() {
+            self.prg_ram.copy_from_slice(&s.prg_ram);
+        }
         self.dma_page = s.dma_page;
         self.dma_active = s.dma_active;
         self.dma_addr = s.dma_addr;

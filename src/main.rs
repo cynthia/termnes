@@ -9,8 +9,8 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use termnes::audio::AudioOutput;
 use termnes::bus::Bus;
 use termnes::cartridge::Cartridge;
-use termnes::cpu::Cpu;
 use termnes::cpu::opcodes::decode;
+use termnes::cpu::Cpu;
 use termnes::input::JoypadButton;
 use termnes::remote_audio::{self, RemoteAudioSender};
 use termnes::renderer::TuiRenderer;
@@ -90,10 +90,7 @@ fn main() {
     }
 
     if args.resize {
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::SetSize(256, 120)
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::SetSize(256, 120));
         return;
     }
 
@@ -183,7 +180,14 @@ fn main() {
         }
     };
 
-    run_emulation(&mut cpu, &mut renderer, audio.as_ref(), remote_audio.as_mut(), &rom_path, args.autoresume);
+    run_emulation(
+        &mut cpu,
+        &mut renderer,
+        audio.as_ref(),
+        remote_audio.as_mut(),
+        &rom_path,
+        args.autoresume,
+    );
 }
 
 fn save_state_path(rom_path: &str) -> std::path::PathBuf {
@@ -231,7 +235,14 @@ fn do_load_state(cpu: &mut Cpu, rom_path: &str) {
     }
 }
 
-fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&AudioOutput>, mut remote_audio: Option<&mut RemoteAudioSender>, rom_path: &str, autoresume: bool) {
+fn run_emulation(
+    cpu: &mut Cpu,
+    renderer: &mut TuiRenderer,
+    audio: Option<&AudioOutput>,
+    mut remote_audio: Option<&mut RemoteAudioSender>,
+    rom_path: &str,
+    autoresume: bool,
+) {
     eprintln!("Emulation started. Press Esc or Ctrl+C to quit.");
     let mut frame_count: u64 = 0;
     let mut input = InputState::new(renderer.has_keyboard_enhancement);
@@ -253,6 +264,9 @@ fn run_emulation(cpu: &mut Cpu, renderer: &mut TuiRenderer, audio: Option<&Audio
                     for _ in 0..3 {
                         cpu.bus.ppu.tick(&mut cpu.bus.cartridge);
                     }
+                    cpu.bus.cartridge.tick_cpu();
+                    let expansion_audio = cpu.bus.cartridge.expansion_audio_sample();
+                    cpu.bus.apu.set_expansion_audio_input(expansion_audio);
                     cpu.bus.apu.tick(1);
                 }
                 if cpu.bus.poll_nmi() {
@@ -339,7 +353,10 @@ fn run_trace(cpu: &mut Cpu, log_path: &str) {
     let mut log = BufWriter::new(file);
 
     let _ = writeln!(log, "NES Trace Log");
-    let _ = writeln!(log, "Format: [#INSTR] PC OP:OPBYTES  A X Y SP P  OPCODE MODE  SL:scanline DOT:cycle");
+    let _ = writeln!(
+        log,
+        "Format: [#INSTR] PC OP:OPBYTES  A X Y SP P  OPCODE MODE  SL:scanline DOT:cycle"
+    );
     let _ = writeln!(log, "---");
 
     let mut frame_count: u64 = 0;
@@ -360,6 +377,9 @@ fn run_trace(cpu: &mut Cpu, log_path: &str) {
                     for _ in 0..3 {
                         cpu.bus.ppu.tick(&mut cpu.bus.cartridge);
                     }
+                    cpu.bus.cartridge.tick_cpu();
+                    let expansion_audio = cpu.bus.cartridge.expansion_audio_sample();
+                    cpu.bus.apu.set_expansion_audio_input(expansion_audio);
                     cpu.bus.apu.tick(1);
                 }
                 if cpu.bus.poll_nmi() {
@@ -370,7 +390,11 @@ fn run_trace(cpu: &mut Cpu, log_path: &str) {
                 }
                 cycles_in_frame += dma_cycles as u64;
                 total_cycles += dma_cycles as u64;
-                push_ring(&mut ring, format!("  [OAM DMA {} cycles]", dma_cycles), RING_SIZE);
+                push_ring(
+                    &mut ring,
+                    format!("  [OAM DMA {} cycles]", dma_cycles),
+                    RING_SIZE,
+                );
                 continue;
             }
 
@@ -404,12 +428,24 @@ fn run_trace(cpu: &mut Cpu, log_path: &str) {
 
             // Hang detection within a single frame
             if cycles_in_frame > HANG_CYCLE_LIMIT {
-                let _ = writeln!(log,
+                let _ =
+                    writeln!(log,
                     "\n!!! HANG DETECTED at frame {} after {} in-frame cycles ({} total instr) !!!",
                     frame_count, cycles_in_frame, instr_count);
-                dump_diagnostics(&mut log, cpu, &ring, frame_count, instr_count, total_cycles, start.elapsed());
+                dump_diagnostics(
+                    &mut log,
+                    cpu,
+                    &ring,
+                    frame_count,
+                    instr_count,
+                    total_cycles,
+                    start.elapsed(),
+                );
                 let _ = log.flush();
-                eprintln!("HANG DETECTED at frame {}. Trace dumped to {}", frame_count, log_path);
+                eprintln!(
+                    "HANG DETECTED at frame {}. Trace dumped to {}",
+                    frame_count, log_path
+                );
                 return;
             }
         }
@@ -429,10 +465,27 @@ fn run_trace(cpu: &mut Cpu, log_path: &str) {
         }
 
         if start.elapsed() > TIMEOUT {
-            let _ = writeln!(log, "\nTIMEOUT after {:?} ({} frames, {} instr)", start.elapsed(), frame_count, instr_count);
-            dump_diagnostics(&mut log, cpu, &ring, frame_count, instr_count, total_cycles, start.elapsed());
+            let _ = writeln!(
+                log,
+                "\nTIMEOUT after {:?} ({} frames, {} instr)",
+                start.elapsed(),
+                frame_count,
+                instr_count
+            );
+            dump_diagnostics(
+                &mut log,
+                cpu,
+                &ring,
+                frame_count,
+                instr_count,
+                total_cycles,
+                start.elapsed(),
+            );
             let _ = log.flush();
-            eprintln!("Timeout reached at frame {}. Trace dumped to {}", frame_count, log_path);
+            eprintln!(
+                "Timeout reached at frame {}. Trace dumped to {}",
+                frame_count, log_path
+            );
             return;
         }
     }
@@ -461,29 +514,50 @@ fn dump_diagnostics(
     let _ = writeln!(log, "elapsed:      {:?}", elapsed);
 
     let _ = writeln!(log, "\n--- CPU state ---");
-    let _ = writeln!(log,
+    let _ = writeln!(
+        log,
         "PC:{:04X} A:{:02X} X:{:02X} Y:{:02X} SP:{:02X} P:{:02X}",
-        cpu.pc, cpu.a, cpu.x, cpu.y, cpu.sp, cpu.status.bits());
+        cpu.pc,
+        cpu.a,
+        cpu.x,
+        cpu.y,
+        cpu.sp,
+        cpu.status.bits()
+    );
 
     let _ = writeln!(log, "\n--- PPU state ---");
-    let _ = writeln!(log,
+    let _ = writeln!(
+        log,
         "scanline:{} cycle:{} frame_complete:{} nmi_triggered:{}",
-        cpu.bus.ppu.scanline, cpu.bus.ppu.cycle,
-        cpu.bus.ppu.frame_complete, cpu.bus.ppu.nmi_triggered);
-    let _ = writeln!(log,
+        cpu.bus.ppu.scanline,
+        cpu.bus.ppu.cycle,
+        cpu.bus.ppu.frame_complete,
+        cpu.bus.ppu.nmi_triggered
+    );
+    let _ = writeln!(
+        log,
         "ctrl:{:02X} mask:{:02X} status:{:02X} oam_addr:{:02X}",
-        cpu.bus.ppu.ctrl, cpu.bus.ppu.mask, cpu.bus.ppu.status, cpu.bus.ppu.oam_addr);
-    let _ = writeln!(log,
+        cpu.bus.ppu.ctrl, cpu.bus.ppu.mask, cpu.bus.ppu.status, cpu.bus.ppu.oam_addr
+    );
+    let _ = writeln!(
+        log,
         "vram_addr:{:04X} temp_vram_addr:{:04X} fine_x:{} write_latch:{}",
-        cpu.bus.ppu.vram_addr, cpu.bus.ppu.temp_vram_addr,
-        cpu.bus.ppu.fine_x, cpu.bus.ppu.write_latch);
-    let _ = writeln!(log,
+        cpu.bus.ppu.vram_addr,
+        cpu.bus.ppu.temp_vram_addr,
+        cpu.bus.ppu.fine_x,
+        cpu.bus.ppu.write_latch
+    );
+    let _ = writeln!(
+        log,
         "t:{:04X} v:{:04X} fx:{}  [coarse_x(t)={}, coarse_y(t)={}, nt(t)={}, fine_y(t)={}]",
-        cpu.bus.ppu.temp_vram_addr, cpu.bus.ppu.vram_addr, cpu.bus.ppu.fine_x,
+        cpu.bus.ppu.temp_vram_addr,
+        cpu.bus.ppu.vram_addr,
+        cpu.bus.ppu.fine_x,
         cpu.bus.ppu.temp_vram_addr & 0x1F,
         (cpu.bus.ppu.temp_vram_addr >> 5) & 0x1F,
         (cpu.bus.ppu.temp_vram_addr >> 10) & 0x03,
-        (cpu.bus.ppu.temp_vram_addr >> 12) & 0x07);
+        (cpu.bus.ppu.temp_vram_addr >> 12) & 0x07
+    );
 
     let _ = writeln!(log, "\n--- OAM (first 4 sprites) ---");
     for i in 0..4 {
@@ -498,16 +572,43 @@ fn dump_diagnostics(
     }
 
     let _ = writeln!(log, "\n--- Sprite-0 Hit Diagnostics ---");
-    let _ = writeln!(log, "collected (spr0 on scanline):    {}", cpu.bus.ppu.dbg_sprite0_collected);
-    let _ = writeln!(log, "opaque-pixel scanlines:          {}", cpu.bus.ppu.dbg_sprite0_opaque_scanlines);
-    let _ = writeln!(log, "opaque-spr but BG transparent:   {}", cpu.bus.ppu.dbg_sprite0_opaque_but_bg_transparent);
-    let _ = writeln!(log, "hits fired:                      {}", cpu.bus.ppu.dbg_sprite0_hits);
-    let _ = writeln!(log, "PPUSCROLL writes (SL 0-239):     {}", cpu.bus.ppu.dbg_scroll_writes_visible);
-    let _ = writeln!(log, "PPUSCROLL writes (VBlank/-1):    {}", cpu.bus.ppu.dbg_scroll_writes_vblank);
+    let _ = writeln!(
+        log,
+        "collected (spr0 on scanline):    {}",
+        cpu.bus.ppu.dbg_sprite0_collected
+    );
+    let _ = writeln!(
+        log,
+        "opaque-pixel scanlines:          {}",
+        cpu.bus.ppu.dbg_sprite0_opaque_scanlines
+    );
+    let _ = writeln!(
+        log,
+        "opaque-spr but BG transparent:   {}",
+        cpu.bus.ppu.dbg_sprite0_opaque_but_bg_transparent
+    );
+    let _ = writeln!(
+        log,
+        "hits fired:                      {}",
+        cpu.bus.ppu.dbg_sprite0_hits
+    );
+    let _ = writeln!(
+        log,
+        "PPUSCROLL writes (SL 0-239):     {}",
+        cpu.bus.ppu.dbg_scroll_writes_visible
+    );
+    let _ = writeln!(
+        log,
+        "PPUSCROLL writes (VBlank/-1):    {}",
+        cpu.bus.ppu.dbg_scroll_writes_vblank
+    );
 
     // Dump the HUD rows of each nametable bank. Sprite 0 is at tile row 3-4.
     // Vertical mirroring: bank 0 = NT0/NT2 (left), bank 1 = NT1/NT3 (right).
-    let _ = writeln!(log, "\n--- Nametable bank 0, rows 0-4 (HUD area, $2000/$2800) ---");
+    let _ = writeln!(
+        log,
+        "\n--- Nametable bank 0, rows 0-4 (HUD area, $2000/$2800) ---"
+    );
     for row in 0..5 {
         let _ = write!(log, "  row {}: ", row);
         for col in 0..32 {
@@ -516,7 +617,10 @@ fn dump_diagnostics(
         }
         let _ = writeln!(log);
     }
-    let _ = writeln!(log, "\n--- Nametable bank 1, rows 0-4 (HUD area, $2400/$2C00) ---");
+    let _ = writeln!(
+        log,
+        "\n--- Nametable bank 1, rows 0-4 (HUD area, $2400/$2C00) ---"
+    );
     for row in 0..5 {
         let _ = write!(log, "  row {}: ", row);
         for col in 0..32 {
@@ -527,8 +631,18 @@ fn dump_diagnostics(
     }
     // Sprite 0 is at X=88, Y=25-32. That's tile (col=11, row=3-4). Show those specifically.
     let _ = writeln!(log, "\nSprite-0 covers tile (col=11, row=3-4).");
-    let _ = writeln!(log, "  bank 0 [3][11] = {:02X}, [4][11] = {:02X}", cpu.bus.ppu.vram[3*32+11], cpu.bus.ppu.vram[4*32+11]);
-    let _ = writeln!(log, "  bank 1 [3][11] = {:02X}, [4][11] = {:02X}", cpu.bus.ppu.vram[0x400+3*32+11], cpu.bus.ppu.vram[0x400+4*32+11]);
+    let _ = writeln!(
+        log,
+        "  bank 0 [3][11] = {:02X}, [4][11] = {:02X}",
+        cpu.bus.ppu.vram[3 * 32 + 11],
+        cpu.bus.ppu.vram[4 * 32 + 11]
+    );
+    let _ = writeln!(
+        log,
+        "  bank 1 [3][11] = {:02X}, [4][11] = {:02X}",
+        cpu.bus.ppu.vram[0x400 + 3 * 32 + 11],
+        cpu.bus.ppu.vram[0x400 + 4 * 32 + 11]
+    );
     if let Some(d) = cpu.bus.ppu.dbg_last_sprite0 {
         let _ = writeln!(log, "last sprite-0 rendered:");
         let _ = writeln!(log,
@@ -544,9 +658,11 @@ fn dump_diagnostics(
     }
     if let Some(d) = cpu.bus.ppu.dbg_last_sprite0_hit {
         let _ = writeln!(log, "last sprite-0 HIT:");
-        let _ = writeln!(log,
+        let _ = writeln!(
+            log,
             "  SL={} OAM[Y={:02X},tile={:02X},attr={:02X},X={:02X}] lo={:02X} hi={:02X}",
-            d.scanline, d.oam_y, d.oam_tile, d.oam_attr, d.oam_x, d.lo, d.hi);
+            d.scanline, d.oam_y, d.oam_tile, d.oam_attr, d.oam_x, d.lo, d.hi
+        );
     } else {
         let _ = writeln!(log, "last sprite-0 HIT:       <never>");
     }
@@ -687,7 +803,9 @@ fn handle_input(cpu: &mut Cpu, input: &mut InputState, rom_path: &str) -> bool {
             }
         }
 
-        let Some(button) = key_to_button(key_event.code) else { continue };
+        let Some(button) = key_to_button(key_event.code) else {
+            continue;
+        };
 
         match key_event.kind {
             // Press or Repeat both re-arm the hold timer (and re-press, which

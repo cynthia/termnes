@@ -37,7 +37,8 @@ impl Mapper for AxromMapper {
 
     fn cpu_write(&mut self, addr: u16, val: u8) {
         if addr >= 0x8000 {
-            self.prg_bank = (val & 0x07) as usize;
+            let bank_mask = if self.prg_rom.len() > 8 * 0x8000 { 0x0F } else { 0x07 };
+            self.prg_bank = (val & bank_mask) as usize;
             self.mirroring = if val & 0x10 != 0 {
                 Mirroring::OneScreenHigh
             } else {

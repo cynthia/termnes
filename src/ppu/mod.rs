@@ -65,10 +65,18 @@ pub struct Ppu {
     /// Counts of PPUSCROLL writes during "visible" rendering (SL 0-239) vs during VBlank/pre-render.
     pub dbg_scroll_writes_visible: u64,
     pub dbg_scroll_writes_vblank: u64,
+    pub dbg_scroll_writes_visible_rendering_on: u64,
+    pub dbg_scroll_writes_visible_rendering_off: u64,
+    pub dbg_mask_writes_visible: u64,
+    pub dbg_ctrl_writes_visible: u64,
+    pub dbg_addr_writes_visible: u64,
     pub dbg_last_sprite0: Option<Sprite0Debug>,
     pub dbg_last_sprite0_hit: Option<Sprite0Debug>,
     pub odd_frame: bool,
     pub last_write: u8,
+    pub render_vram_addr: u16,
+    pub render_fine_x: u8,
+    pub render_was_enabled: bool,
 }
 
 impl Ppu {
@@ -99,10 +107,18 @@ impl Ppu {
             dbg_sprite0_opaque_but_bg_transparent: 0,
             dbg_scroll_writes_visible: 0,
             dbg_scroll_writes_vblank: 0,
+            dbg_scroll_writes_visible_rendering_on: 0,
+            dbg_scroll_writes_visible_rendering_off: 0,
+            dbg_mask_writes_visible: 0,
+            dbg_ctrl_writes_visible: 0,
+            dbg_addr_writes_visible: 0,
             dbg_last_sprite0: None,
             dbg_last_sprite0_hit: None,
             odd_frame: false,
             last_write: 0,
+            render_vram_addr: 0,
+            render_fine_x: 0,
+            render_was_enabled: false,
         }
     }
 
@@ -202,6 +218,9 @@ impl Ppu {
     /// $2000 CTRL
     pub fn write_ctrl(&mut self, val: u8) {
         self.last_write = val;
+        if self.scanline >= 0 && self.scanline < 240 {
+            self.dbg_ctrl_writes_visible += 1;
+        }
         let old_nmi_enabled = (self.ctrl & 0x80) != 0;
         self.ctrl = val;
         let new_nmi_enabled = (val & 0x80) != 0;
@@ -219,6 +238,9 @@ impl Ppu {
     /// $2001 MASK
     pub fn write_mask(&mut self, val: u8) {
         self.last_write = val;
+        if self.scanline >= 0 && self.scanline < 240 {
+            self.dbg_mask_writes_visible += 1;
+        }
         self.mask = val;
     }
 
@@ -246,6 +268,11 @@ impl Ppu {
         self.last_write = val;
         if self.scanline >= 0 && self.scanline < 240 {
             self.dbg_scroll_writes_visible += 1;
+            if self.mask & 0x18 != 0 {
+                self.dbg_scroll_writes_visible_rendering_on += 1;
+            } else {
+                self.dbg_scroll_writes_visible_rendering_off += 1;
+            }
         } else {
             self.dbg_scroll_writes_vblank += 1;
         }
@@ -265,6 +292,9 @@ impl Ppu {
     /// $2006 ADDR — first write = high byte, second write = low byte.
     pub fn write_addr(&mut self, val: u8) {
         self.last_write = val;
+        if self.scanline >= 0 && self.scanline < 240 {
+            self.dbg_addr_writes_visible += 1;
+        }
         if !self.write_latch {
             self.temp_vram_addr = (self.temp_vram_addr & 0x00FF) | ((val as u16 & 0x3F) << 8);
             self.write_latch = true;

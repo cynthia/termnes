@@ -18,8 +18,8 @@ use triangle::Triangle;
 /// register of any length-counter channel (pulse1/2 $4003/$4007, triangle
 /// $400B, noise $400F).
 pub(crate) const LENGTH_TABLE: [u8; 32] = [
-    10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48, 20, 96,
-    22, 192, 24, 72, 26, 16, 28, 32, 30,
+    10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48, 20, 96, 22,
+    192, 24, 72, 26, 16, 28, 32, 30,
 ];
 
 /// NTSC CPU frequency in Hz.
@@ -53,6 +53,7 @@ pub struct Apu {
     sample_accumulator: f32,
     sample_acc_count: u32,
     sample_buffer: Vec<f32>,
+    expansion_audio_input: f32,
 
     // ── Output filters (NES hardware path) ────────────────────────────────────
     hp1: HighPassFilter,
@@ -85,6 +86,7 @@ impl Apu {
             sample_accumulator: 0.0,
             sample_acc_count: 0,
             sample_buffer: Vec::new(),
+            expansion_audio_input: 0.0,
 
             hp1: HighPassFilter::new(90.0, 44100.0),
             hp2: HighPassFilter::new(440.0, 44100.0),
@@ -107,6 +109,10 @@ impl Apu {
     /// Take all buffered audio samples, leaving the internal buffer empty.
     pub fn drain_samples(&mut self) -> Vec<f32> {
         std::mem::take(&mut self.sample_buffer)
+    }
+
+    pub fn set_expansion_audio_input(&mut self, sample: f32) {
+        self.expansion_audio_input = sample;
     }
 
     // ── Tick ──────────────────────────────────────────────────────────────────
@@ -235,7 +241,7 @@ impl Apu {
             0.0
         };
 
-        pulse_out + tnd_out
+        pulse_out + tnd_out + self.expansion_audio_input
     }
 
     // ── Register dispatch ─────────────────────────────────────────────────────
@@ -303,25 +309,35 @@ impl Apu {
 
     pub fn capture_state(&self) -> ApuState {
         ApuState {
-            cycle: self.cycle, mode: self.mode, irq_inhibit: self.irq_inhibit,
+            cycle: self.cycle,
+            mode: self.mode,
+            irq_inhibit: self.irq_inhibit,
             frame_interrupt: self.frame_interrupt,
             pending_reset_cycles: self.pending_reset_cycles,
-            pending_mode: self.pending_mode, pending_irq_inhibit: self.pending_irq_inhibit,
+            pending_mode: self.pending_mode,
+            pending_irq_inhibit: self.pending_irq_inhibit,
             even_cycle: self.even_cycle,
-            pulse1: self.pulse1.capture_state(), pulse2: self.pulse2.capture_state(),
-            triangle: self.triangle.capture_state(), noise: self.noise.capture_state(),
+            pulse1: self.pulse1.capture_state(),
+            pulse2: self.pulse2.capture_state(),
+            triangle: self.triangle.capture_state(),
+            noise: self.noise.capture_state(),
             dmc: self.dmc.capture_state(),
         }
     }
 
     pub fn restore_state(&mut self, s: &ApuState) {
-        self.cycle = s.cycle; self.mode = s.mode; self.irq_inhibit = s.irq_inhibit;
+        self.cycle = s.cycle;
+        self.mode = s.mode;
+        self.irq_inhibit = s.irq_inhibit;
         self.frame_interrupt = s.frame_interrupt;
         self.pending_reset_cycles = s.pending_reset_cycles;
-        self.pending_mode = s.pending_mode; self.pending_irq_inhibit = s.pending_irq_inhibit;
+        self.pending_mode = s.pending_mode;
+        self.pending_irq_inhibit = s.pending_irq_inhibit;
         self.even_cycle = s.even_cycle;
-        self.pulse1.restore_state(&s.pulse1); self.pulse2.restore_state(&s.pulse2);
-        self.triangle.restore_state(&s.triangle); self.noise.restore_state(&s.noise);
+        self.pulse1.restore_state(&s.pulse1);
+        self.pulse2.restore_state(&s.pulse2);
+        self.triangle.restore_state(&s.triangle);
+        self.noise.restore_state(&s.noise);
         self.dmc.restore_state(&s.dmc);
     }
 }

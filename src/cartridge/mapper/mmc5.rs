@@ -51,9 +51,9 @@ impl Mmc5Mapper {
             chr_mode: 0,
             exram_mode: 0,
             prg_ram_bank: 0,
-            prg_bank_8000: 0,
-            prg_bank_a000: 0,
-            prg_bank_c000: 0,
+            prg_bank_8000: last_bank | 0x80,
+            prg_bank_a000: last_bank | 0x80,
+            prg_bank_c000: last_bank | 0x80,
             prg_bank_e000: last_bank | 0x80,
             chr_banks_a: [0; 8],
             chr_banks_b: [0; 4],
@@ -80,13 +80,51 @@ impl Mmc5Mapper {
             self.prg_ram[(ram_bank * 0x2000) + offset]
         }
     }
+
+    fn get_prg_bank(&self, addr: u16) -> usize {
+        match self.prg_mode {
+            0 => {
+                // 32KB mode
+                (self.prg_bank_e000 & 0x7C) | (self.prg_bank_e000 & 0x80) | ((addr as usize - 0x8000) / 0x2000)
+            }
+            1 => {
+                // 16KB mode
+                if addr < 0xC000 {
+                    (self.prg_bank_a000 & 0x7E) | (self.prg_bank_a000 & 0x80) | ((addr as usize - 0x8000) / 0x2000)
+                } else {
+                    (self.prg_bank_e000 & 0x7E) | (self.prg_bank_e000 & 0x80) | ((addr as usize - 0xC000) / 0x2000)
+                }
+            }
+            2 => {
+                // 16KB-8KB mode
+                if addr < 0xC000 {
+                    (self.prg_bank_a000 & 0x7E) | (self.prg_bank_a000 & 0x80) | ((addr as usize - 0x8000) / 0x2000)
+                } else if addr < 0xE000 {
+                    self.prg_bank_c000
+                } else {
+                    self.prg_bank_e000 | 0x80
+                }
+            }
+            3 => {
+                // 8KB mode
+                match addr {
+                    0x8000..=0x9FFF => self.prg_bank_8000,
+                    0xA000..=0xBFFF => self.prg_bank_a000,
+                    0xC000..=0xDFFF => self.prg_bank_c000,
+                    0xE000..=0xFFFF => self.prg_bank_e000 | 0x80,
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl Mapper for Mmc5Mapper {
     fn cpu_read(&self, addr: u16) -> Option<u8> {
         match addr {
             0x5204 => {
-                // IRQ status stub
+                // IRQ status stub (bit 7: IRQ pending, bit 6: In-frame)
                 Some(0)
             }
             0x5205 => Some((self.multiplier_1 as u16 * self.multiplier_2 as u16) as u8),
@@ -101,39 +139,9 @@ impl Mapper for Mmc5Mapper {
             0x6000..=0x7FFF => {
                 Some(self.prg_read_8k(self.prg_ram_bank, addr as usize - 0x6000))
             }
-            0x8000..=0x9FFF => {
-                let bank = match self.prg_mode {
-                    0 | 1 => (self.prg_bank_e000 & 0x7C) | 0x80,
-                    2 => (self.prg_bank_c000 & 0x7E) | 0x80,
-                    3 => self.prg_bank_8000 | 0x80,
-                    _ => unreachable!(),
-                };
-                Some(self.prg_read_8k(bank, addr as usize - 0x8000))
-            }
-            0xA000..=0xBFFF => {
-                let bank = match self.prg_mode {
-                    0 | 1 => (self.prg_bank_e000 & 0x7C) | 0x81,
-                    2 => (self.prg_bank_c000 & 0x7E) | 0x81,
-                    3 => self.prg_bank_a000 | 0x80,
-                    _ => unreachable!(),
-                };
-                Some(self.prg_read_8k(bank, addr as usize - 0xA000))
-            }
-            0xC000..=0xDFFF => {
-                let bank = match self.prg_mode {
-                    0 | 1 => (self.prg_bank_e000 & 0x7C) | 0x82,
-                    2 | 3 => self.prg_bank_c000 | 0x80,
-                    _ => unreachable!(),
-                };
-                Some(self.prg_read_8k(bank, addr as usize - 0xC000))
-            }
-            0xE000..=0xFFFF => {
-                let bank = match self.prg_mode {
-                    0 | 1 => (self.prg_bank_e000 & 0x7C) | 0x83,
-                    2 | 3 => self.prg_bank_e000 | 0x80,
-                    _ => unreachable!(),
-                };
-                Some(self.prg_read_8k(bank, addr as usize - 0xE000))
+            0x8000..=0xFFFF => {
+                let bank = self.get_prg_bank(addr);
+                Some(self.prg_read_8k(bank, addr as usize % 0x2000))
             }
             _ => None,
         }
@@ -160,10 +168,7 @@ impl Mapper for Mmc5Mapper {
             0x5205 => self.multiplier_1 = val,
             0x5206 => self.multiplier_2 = val,
             0x5C00..=0x5FFF => {
-                if self.exram_mode == 0 || self.exram_mode == 1 {
-                    // EXRAM writeable during rendering if rendering is enabled, etc.
-                    self.exram[addr as usize - 0x5C00] = val;
-                } else if self.exram_mode == 2 {
+                if self.exram_mode == 0 || self.exram_mode == 1 || self.exram_mode == 2 {
                     self.exram[addr as usize - 0x5C00] = val;
                 }
             }
@@ -173,17 +178,11 @@ impl Mapper for Mmc5Mapper {
                     self.prg_ram[bank * 0x2000 + (addr as usize - 0x6000)] = val;
                 }
             }
-            0x8000..=0x9FFF => {
-                // If mapped to RAM, write
-                if self.prg_mode == 3 && self.prg_bank_8000 & 0x80 == 0 {
-                    let bank = self.prg_bank_8000 & 0x07;
-                    self.prg_ram[bank * 0x2000 + (addr as usize - 0x8000)] = val;
-                }
-            }
-            0xA000..=0xBFFF => {
-                if self.prg_mode == 3 && self.prg_bank_a000 & 0x80 == 0 {
-                    let bank = self.prg_bank_a000 & 0x07;
-                    self.prg_ram[bank * 0x2000 + (addr as usize - 0xA000)] = val;
+            0x8000..=0xFFFF => {
+                let bank = self.get_prg_bank(addr);
+                if bank & 0x80 == 0 && self.ram_protect_1 == 2 && self.ram_protect_2 == 1 {
+                    let ram_bank = bank & 0x07;
+                    self.prg_ram[ram_bank * 0x2000 + (addr as usize % 0x2000)] = val;
                 }
             }
             _ => {}
@@ -200,16 +199,18 @@ impl Mapper for Mmc5Mapper {
         let num_banks = self.chr_rom.len() / 0x0400;
         if num_banks == 0 { return Some(0); }
 
-        // Simplify for testing: use banks_a
         let bank = match self.chr_mode {
-            0 => (self.chr_banks_a[7] & 0xFF8) + (addr as usize / 0x0400),
+            0 => (self.chr_banks_a[7] & 0xFF8) | (addr as usize / 0x0400),
             1 => {
-                let b = if addr < 0x1000 { self.chr_banks_a[3] & 0xFFC } else { self.chr_banks_a[7] & 0xFFC };
-                b + (addr as usize % 0x1000) / 0x0400
+                if addr < 0x1000 {
+                    (self.chr_banks_a[3] & 0xFFC) | (addr as usize / 0x0400)
+                } else {
+                    (self.chr_banks_a[7] & 0xFFC) | ((addr as usize - 0x1000) / 0x0400)
+                }
             }
             2 => {
                 let idx = (addr as usize / 0x0800) * 2 + 1;
-                (self.chr_banks_a[idx] & 0xFFE) + (addr as usize % 0x0800) / 0x0400
+                (self.chr_banks_a[idx] & 0xFFE) | ((addr as usize % 0x0800) / 0x0400)
             }
             3 => self.chr_banks_a[addr as usize / 0x0400],
             _ => unreachable!(),
