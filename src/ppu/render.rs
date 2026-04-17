@@ -1,4 +1,3 @@
-use super::palette::NES_PALETTE;
 use super::{Ppu, Sprite0Debug};
 use crate::cartridge::Cartridge;
 
@@ -273,7 +272,18 @@ impl Ppu {
                 pal_base + final_color as u16
             };
             let entry = self.ppu_read(pal_addr, cartridge) & 0x3F;
-            let (r, g, b) = NES_PALETTE[entry as usize];
+            let (mut r, mut g, mut b) = crate::ppu::palette::NES_PALETTE[entry as usize];
+
+            // Apply color emphasis (PPUMASK bits 5, 6, 7)
+            if self.mask & 0xE0 != 0 {
+                let emp_r = self.mask & 0x20 != 0;
+                let emp_g = self.mask & 0x40 != 0;
+                let emp_b = self.mask & 0x80 != 0;
+
+                if !emp_r { r = r.saturating_sub(r / 4); }
+                if !emp_g { g = g.saturating_sub(g / 4); }
+                if !emp_b { b = b.saturating_sub(b / 4); }
+            }
 
             let i = (y as usize * SCREEN_WIDTH + x as usize) * 3;
             self.framebuffer[i] = r;
@@ -299,7 +309,7 @@ impl Ppu {
 
     /// Collect up to 8 sprites whose Y range covers `scanline`.
     fn collect_sprites(
-        &self,
+        &mut self,
         scanline: i16,
         pt_base: u16,
         cartridge: &Cartridge,
@@ -308,13 +318,17 @@ impl Ppu {
         let tall = self.ctrl & 0x20 != 0; // 8×16 mode
         let sprite_h = if tall { 16i16 } else { 8i16 };
 
+        let mut sprite_count = 0;
         for i in 0..64usize {
-            if sprites.len() >= 8 {
-                break; // sprite overflow (flag not set for simplicity)
-            }
             // OAM: [Y, tile, attr, X] — Y is stored as screen_y - 1
             let oy = self.oam[i * 4] as i16 + 1;
             if scanline < oy || scanline >= oy + sprite_h {
+                continue;
+            }
+
+            sprite_count += 1;
+            if sprite_count > 8 {
+                self.status |= 0x20;
                 continue;
             }
 
