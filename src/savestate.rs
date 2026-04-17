@@ -168,6 +168,11 @@ pub enum MapperState {
         prg_mode: u8,
         chr_mode: u8,
         prg_banks: Vec<usize>,
+        irq_target: u8,
+        irq_enable: bool,
+        irq_pending: bool,
+        in_frame: bool,
+        scanline_counter: u8,
     },
     Vrc6 {
         prg_bank_16k: usize,

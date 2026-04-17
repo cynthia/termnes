@@ -34,6 +34,13 @@ pub struct Mmc5Mapper {
 
     multiplier_1: u8,
     multiplier_2: u8,
+
+    irq_target: u8,
+    irq_enable: bool,
+    irq_pending: std::cell::Cell<bool>,
+    in_frame: std::cell::Cell<bool>,
+    scanline_counter: u8,
+    watchdog: std::cell::Cell<u8>,
 }
 
 impl Mmc5Mapper {
@@ -65,6 +72,12 @@ impl Mmc5Mapper {
             ram_protect_2: 0,
             multiplier_1: 0,
             multiplier_2: 0,
+            irq_target: 0,
+            irq_enable: false,
+            irq_pending: std::cell::Cell::new(false),
+            in_frame: std::cell::Cell::new(false),
+            scanline_counter: 0,
+            watchdog: std::cell::Cell::new(0),
         }
     }
 
@@ -124,8 +137,11 @@ impl Mapper for Mmc5Mapper {
     fn cpu_read(&self, addr: u16) -> Option<u8> {
         match addr {
             0x5204 => {
-                // IRQ status stub (bit 7: IRQ pending, bit 6: In-frame)
-                Some(0)
+                let mut status = 0;
+                if self.irq_pending.get() { status |= 0x80; }
+                if self.in_frame.get() { status |= 0x40; }
+                self.irq_pending.set(false);
+                Some(status)
             }
             0x5205 => Some((self.multiplier_1 as u16 * self.multiplier_2 as u16) as u8),
             0x5206 => Some(((self.multiplier_1 as u16 * self.multiplier_2 as u16) >> 8) as u8),
@@ -165,6 +181,8 @@ impl Mapper for Mmc5Mapper {
             0x5120..=0x5127 => self.chr_banks_a[addr as usize - 0x5120] = val as usize | (self.chr_high << 8),
             0x5128..=0x512B => self.chr_banks_b[addr as usize - 0x5128] = val as usize | (self.chr_high << 8),
             0x5130 => self.chr_high = (val & 0x03) as usize,
+            0x5203 => self.irq_target = val,
+            0x5204 => self.irq_enable = (val & 0x80) != 0,
             0x5205 => self.multiplier_1 = val,
             0x5206 => self.multiplier_2 = val,
             0x5C00..=0x5FFF => {
@@ -235,6 +253,25 @@ impl Mapper for Mmc5Mapper {
         }
     }
 
+    fn check_irq(&self) -> bool {
+        self.irq_pending.get() && self.irq_enable
+    }
+
+    fn tick_scanline(&mut self) {
+        let wd = self.watchdog.get();
+        if wd == 0 {
+            self.in_frame.set(true);
+            self.scanline_counter = 0;
+            self.irq_pending.set(false);
+        } else {
+            self.scanline_counter = self.scanline_counter.saturating_add(1);
+            if self.scanline_counter == self.irq_target {
+                self.irq_pending.set(true);
+            }
+        }
+        self.watchdog.set(114);
+    }
+
     fn save_mapper_state(&self) -> MapperState {
         MapperState::Mmc5 {
             prg_mode: self.prg_mode,
@@ -246,11 +283,16 @@ impl Mapper for Mmc5Mapper {
                 self.prg_bank_c000,
                 self.prg_bank_e000,
             ],
+            irq_target: self.irq_target,
+            irq_enable: self.irq_enable,
+            irq_pending: self.irq_pending.get(),
+            in_frame: self.in_frame.get(),
+            scanline_counter: self.scanline_counter,
         }
     }
 
     fn load_mapper_state(&mut self, state: &MapperState) {
-        if let MapperState::Mmc5 { prg_mode, chr_mode, prg_banks } = state {
+        if let MapperState::Mmc5 { prg_mode, chr_mode, prg_banks, irq_target, irq_enable, irq_pending, in_frame, scanline_counter } = state {
             self.prg_mode = *prg_mode;
             self.chr_mode = *chr_mode;
             if prg_banks.len() >= 5 {
@@ -260,6 +302,11 @@ impl Mapper for Mmc5Mapper {
                 self.prg_bank_c000 = prg_banks[3];
                 self.prg_bank_e000 = prg_banks[4];
             }
+            self.irq_target = *irq_target;
+            self.irq_enable = *irq_enable;
+            self.irq_pending.set(*irq_pending);
+            self.in_frame.set(*in_frame);
+            self.scanline_counter = *scanline_counter;
         }
     }
 }
