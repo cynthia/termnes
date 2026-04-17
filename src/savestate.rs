@@ -164,6 +164,11 @@ pub enum MapperState {
         chr_ram: Vec<u8>,
         mirroring: u8,
     },
+    Mmc5 {
+        prg_mode: u8,
+        chr_mode: u8,
+        prg_banks: Vec<usize>,
+    },
     Unrom {
         bank_select: usize,
         chr_ram: Vec<u8>,
