@@ -63,7 +63,7 @@ host you can forward audio over TCP to a local `listen` process:
    termnes mario.nes --stream-audio localhost:9001
    ```
 
-The wire format is raw 32-bit float PCM at 44.1 kHz mono.
+The wire format is raw 16-bit signed PCM at 44.1 kHz mono, little-endian.
 
 ## Terminal Configuration
 
