@@ -37,7 +37,7 @@ impl Mapper for NromMapper {
         // NROM PRG-ROM is read-only
     }
 
-    fn chr_read(&self, addr: u16) -> Option<u8> {
+    fn chr_read(&self, addr: u16, _is_sprite: bool) -> Option<u8> {
         if (addr as usize) < self.chr.len() {
             Some(self.chr[addr as usize])
         } else {

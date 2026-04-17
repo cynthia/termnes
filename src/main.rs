@@ -256,19 +256,9 @@ fn run_emulation(
 
         // Run CPU until PPU completes a frame (~29780 CPU cycles for NTSC)
         while !cpu.bus.ppu.frame_complete {
-            // Handle pending OAM DMA (513 CPU cycles)
-            let dma_cycles = cpu.bus.do_dma();
-            if dma_cycles > 0 {
-                // Tick both PPU and APU during DMA (CPU is halted, but PPU/APU continue)
-                for _ in 0..dma_cycles as u32 {
-                    for _ in 0..3 {
-                        cpu.bus.ppu.tick(&mut cpu.bus.cartridge);
-                    }
-                    cpu.bus.cartridge.tick_cpu();
-                    let expansion_audio = cpu.bus.cartridge.expansion_audio_sample();
-                    cpu.bus.apu.set_expansion_audio_input(expansion_audio);
-                    cpu.bus.apu.tick(1);
-                }
+            // Handle pending OAM DMA (CPU is halted for 513-514 cycles while
+            // PPU/APU/mapper continue ticking; do_dma handles that internally).
+            if cpu.bus.do_dma() {
                 if cpu.bus.poll_nmi() {
                     cpu.nmi();
                 }
@@ -370,31 +360,16 @@ fn run_trace(cpu: &mut Cpu, log_path: &str) {
         let frame_start_instr = instr_count;
 
         while !cpu.bus.ppu.frame_complete {
-            // DMA handling (copied from run_emulation)
-            let dma_cycles = cpu.bus.do_dma();
-            if dma_cycles > 0 {
-                for _ in 0..dma_cycles as u32 {
-                    for _ in 0..3 {
-                        cpu.bus.ppu.tick(&mut cpu.bus.cartridge);
-                    }
-                    cpu.bus.cartridge.tick_cpu();
-                    let expansion_audio = cpu.bus.cartridge.expansion_audio_sample();
-                    cpu.bus.apu.set_expansion_audio_input(expansion_audio);
-                    cpu.bus.apu.tick(1);
-                }
+            if cpu.bus.do_dma() {
                 if cpu.bus.poll_nmi() {
                     cpu.nmi();
                 }
                 if cpu.bus.poll_irq() {
                     cpu.irq();
                 }
-                cycles_in_frame += dma_cycles as u64;
-                total_cycles += dma_cycles as u64;
-                push_ring(
-                    &mut ring,
-                    format!("  [OAM DMA {} cycles]", dma_cycles),
-                    RING_SIZE,
-                );
+                cycles_in_frame += 513;
+                total_cycles += 513;
+                push_ring(&mut ring, "  [OAM DMA]".to_string(), RING_SIZE);
                 continue;
             }
 

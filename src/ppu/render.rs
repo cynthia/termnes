@@ -53,10 +53,11 @@ impl Ppu {
         let pre_render = self.scanline == -1;
 
         if self.cycle == 0 && visible {
+            self.render_vram_addr = self.vram_addr;
             self.render_fine_x = self.fine_x;
         }
         if rendering && !self.render_was_enabled && visible {
-            self.vram_addr = self.temp_vram_addr;
+            self.render_vram_addr = self.vram_addr;
             self.render_fine_x = self.fine_x;
         }
         self.render_was_enabled = rendering;
@@ -102,11 +103,11 @@ impl Ppu {
     }
 
     fn increment_render_coarse_x(&mut self) {
-        if (self.vram_addr & 0x001F) == 31 {
-            self.vram_addr &= !0x001F;
-            self.vram_addr ^= 0x0400;
+        if (self.render_vram_addr & 0x001F) == 31 {
+            self.render_vram_addr &= !0x001F;
+            self.render_vram_addr ^= 0x0400;
         } else {
-            self.vram_addr += 1;
+            self.render_vram_addr += 1;
         }
     }
 
@@ -115,22 +116,22 @@ impl Ppu {
             return (0, 0);
         }
 
-        let nt_addr = 0x2000 | (self.vram_addr & 0x0FFF);
-        let tile_idx = self.ppu_read(nt_addr, cartridge) as u16;
+        let nt_addr = 0x2000 | (self.render_vram_addr & 0x0FFF);
+        let tile_idx = self.ppu_read(nt_addr, cartridge, false) as u16;
 
         let attr_addr = 0x23C0
-            | (self.vram_addr & 0x0C00)
-            | ((self.vram_addr >> 4) & 0x38)
-            | ((self.vram_addr >> 2) & 0x07);
-        let attr = self.ppu_read(attr_addr, cartridge);
-        let shift = ((self.vram_addr >> 4) & 4) | (self.vram_addr & 2);
+            | (self.render_vram_addr & 0x0C00)
+            | ((self.render_vram_addr >> 4) & 0x38)
+            | ((self.render_vram_addr >> 2) & 0x07);
+        let attr = self.ppu_read(attr_addr, cartridge, false);
+        let shift = ((self.render_vram_addr >> 4) & 4) | (self.render_vram_addr & 2);
         let palette = ((attr >> shift) & 0x03) as u8;
 
-        let fine_y = (self.vram_addr >> 12) & 0x07;
+        let fine_y = (self.render_vram_addr >> 12) & 0x07;
         let bg_pt_base: u16 = if self.ctrl & 0x10 != 0 { 0x1000 } else { 0x0000 };
         let pt_addr = bg_pt_base + tile_idx * 16 + fine_y;
-        let lo = self.ppu_read(pt_addr, cartridge);
-        let hi = self.ppu_read(pt_addr + 8, cartridge);
+        let lo = self.ppu_read(pt_addr, cartridge, false);
+        let hi = self.ppu_read(pt_addr + 8, cartridge, false);
         let bit = 7 - self.render_fine_x;
         let color = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
         (color, palette)
@@ -228,7 +229,7 @@ impl Ppu {
         } else {
             pal_base + final_color as u16
         };
-        let entry = self.ppu_read(pal_addr, cartridge) & 0x3F;
+        let entry = self.ppu_read(pal_addr, cartridge, false) & 0x3F;
         let (mut r, mut g, mut b) = crate::ppu::palette::NES_PALETTE[entry as usize];
         if self.mask & 0xE0 != 0 {
             let emp_r = self.mask & 0x20 != 0;
@@ -274,197 +275,6 @@ impl Ppu {
                 coarse_y += 1;
             }
             self.vram_addr = (self.vram_addr & !0x03E0) | (coarse_y << 5);
-        }
-    }
-
-    // ── Scanline renderer ────────────────────────────────────────────────────
-
-    fn render_scanline(&mut self, scanline: i16, cartridge: &Cartridge) {
-        let y = scanline as u16;
-        let bg_enabled = self.mask & 0x08 != 0;
-        let spr_enabled = self.mask & 0x10 != 0;
-
-        let bg_pt_base: u16 = if self.ctrl & 0x10 != 0 { 0x1000 } else { 0x0000 };
-        let spr_pt_base: u16 = if self.ctrl & 0x08 != 0 { 0x1000 } else { 0x0000 };
-
-        // ── BG pixel buffer (33 tiles = 264 pixels; we slice 256 starting at fine_x)
-        // Sourced from the snapshot of `v` at the start of this scanline; each tile
-        // fetch increments a local v's coarse-X, wrapping the horizontal NT bit.
-        let mut bg_buf: [(u8, u8); 264] = [(0, 0); 264];
-        if bg_enabled {
-            let mut v = self.vram_addr;
-            for tile_i in 0..33usize {
-                let nt_addr = 0x2000 | (v & 0x0FFF);
-                let tile_idx = self.ppu_read(nt_addr, cartridge) as u16;
-
-                let attr_addr = 0x23C0
-                    | (v & 0x0C00)
-                    | ((v >> 4) & 0x38)
-                    | ((v >> 2) & 0x07);
-                let attr = self.ppu_read(attr_addr, cartridge);
-                let shift = ((v >> 4) & 4) | (v & 2);
-                let palette = ((attr >> shift) & 0x03) as u8;
-
-                let fine_y = (v >> 12) & 0x07;
-                let pt_addr = bg_pt_base + tile_idx * 16 + fine_y;
-                let lo = self.ppu_read(pt_addr, cartridge);
-                let hi = self.ppu_read(pt_addr + 8, cartridge);
-
-                for px in 0u8..8 {
-                    let bit = 7 - px;
-                    let color = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
-                    bg_buf[tile_i * 8 + px as usize] = (color, palette);
-                }
-
-                // Local coarse-X increment (31 → 0 toggles horizontal NT bit)
-                if (v & 0x001F) == 31 {
-                    v &= !0x001F;
-                    v ^= 0x0400;
-                } else {
-                    v += 1;
-                }
-            }
-        }
-
-        // Collect up to 8 sprites visible on this scanline, then expand to pixels
-        let sprites = self.collect_sprites(scanline, spr_pt_base, cartridge);
-
-        // ── Debug: capture sprite-0 info if it's on this scanline ──
-        let mut spr0_dbg: Option<Sprite0Debug> = None;
-        if let Some(s0) = sprites.iter().find(|s| s.is_sprite0) {
-            self.dbg_sprite0_collected += 1;
-            spr0_dbg = Some(Sprite0Debug {
-                scanline,
-                oam_y: s0.oam_y,
-                oam_tile: s0.oam_tile,
-                oam_attr: s0.oam_attr,
-                oam_x: s0.x,
-                row_used: s0.row_used,
-                lo: s0.lo,
-                hi: s0.hi,
-                mask_at_check: self.mask,
-                bg_enabled,
-                spr_enabled,
-                had_opaque: false,
-                first_opaque_x: 256,
-                had_opaque_bg_at_opaque_spr: false,
-                fired: false,
-            });
-        }
-
-        // Per-pixel sprite buffer: (color, palette, behind_bg, is_sprite0).
-        // Composited back-to-front: iterate from lowest priority (highest OAM
-        // index) to highest (OAM index 0). Only OPAQUE pixels overwrite the
-        // buffer — a higher-priority sprite's transparent pixel must never
-        // erase a lower-priority sprite's opaque pixel.
-        let mut spr_px: [(u8, u8, bool, bool); 256] = [(0, 0, false, false); 256];
-        for spr in sprites.iter().rev() {
-            for px in 0..8u16 {
-                let sx = (spr.x as u16).wrapping_add(px);
-                if sx >= 256 {
-                    continue;
-                }
-                let bit = if spr.flip_h { px } else { 7 - px } as u8;
-                let lo = (spr.lo >> bit) & 1;
-                let hi = (spr.hi >> bit) & 1;
-                let color = (hi << 1) | lo;
-
-                if color != 0 {
-                    spr_px[sx as usize] =
-                        (color, spr.palette, spr.behind_bg, spr.is_sprite0);
-                }
-
-                // Debug: record sprite-0 opaque pixels regardless of whether
-                // a higher-priority sprite ended up winning this pixel.
-                if spr.is_sprite0 && color != 0 {
-                    if let Some(dbg) = spr0_dbg.as_mut() {
-                        if !dbg.had_opaque {
-                            dbg.had_opaque = true;
-                            dbg.first_opaque_x = sx;
-                        }
-                    }
-                }
-            }
-        }
-
-        let fx = self.fine_x as usize;
-        for x in 0u16..256 {
-            let (bg_color, bg_pal) = if bg_enabled {
-                bg_buf[fx + x as usize]
-            } else {
-                (0, 0)
-            };
-
-            let (spr_color, spr_pal, spr_behind, is_spr0) = spr_px[x as usize];
-
-            // Sprite-0 hit: opaque sprite-0 pixel overlaps opaque BG pixel
-            // (x==255 is excluded per hardware spec)
-            if is_spr0 && spr_enabled && bg_enabled && spr_color != 0 && bg_color != 0 && x < 255 {
-                self.status |= 0x40;
-                if let Some(dbg) = spr0_dbg.as_mut() {
-                    dbg.had_opaque_bg_at_opaque_spr = true;
-                    dbg.fired = true;
-                }
-            } else if is_spr0 && spr_color != 0 {
-                if let Some(dbg) = spr0_dbg.as_mut() {
-                    // Record that sprite 0 had an opaque pixel here, even if no hit.
-                    if bg_color != 0 {
-                        dbg.had_opaque_bg_at_opaque_spr = true;
-                    }
-                }
-            }
-
-            // Final pixel priority
-            let (pal_base, final_color) = if spr_enabled
-                && spr_color != 0
-                && (!spr_behind || bg_color == 0)
-            {
-                // Sprite palettes at $3F10-$3F1F
-                (0x3F10 + (spr_pal as u16) * 4, spr_color)
-            } else if bg_enabled && bg_color != 0 {
-                (0x3F00 + (bg_pal as u16) * 4, bg_color)
-            } else {
-                (0x3F00, 0u8) // backdrop / transparent
-            };
-
-            let pal_addr = if final_color == 0 {
-                0x3F00u16
-            } else {
-                pal_base + final_color as u16
-            };
-            let entry = self.ppu_read(pal_addr, cartridge) & 0x3F;
-            let (mut r, mut g, mut b) = crate::ppu::palette::NES_PALETTE[entry as usize];
-
-            // Apply color emphasis (PPUMASK bits 5, 6, 7)
-            if self.mask & 0xE0 != 0 {
-                let emp_r = self.mask & 0x20 != 0;
-                let emp_g = self.mask & 0x40 != 0;
-                let emp_b = self.mask & 0x80 != 0;
-
-                if !emp_r { r = r.saturating_sub(r / 4); }
-                if !emp_g { g = g.saturating_sub(g / 4); }
-                if !emp_b { b = b.saturating_sub(b / 4); }
-            }
-
-            let i = (y as usize * SCREEN_WIDTH + x as usize) * 3;
-            self.framebuffer[i] = r;
-            self.framebuffer[i + 1] = g;
-            self.framebuffer[i + 2] = b;
-        }
-
-        // ── Debug: commit sprite-0 record for this scanline ──
-        if let Some(dbg) = spr0_dbg {
-            if dbg.had_opaque {
-                self.dbg_sprite0_opaque_scanlines += 1;
-                if !dbg.had_opaque_bg_at_opaque_spr {
-                    self.dbg_sprite0_opaque_but_bg_transparent += 1;
-                }
-            }
-            if dbg.fired {
-                self.dbg_sprite0_hits += 1;
-                self.dbg_last_sprite0_hit = Some(dbg);
-            }
-            self.dbg_last_sprite0 = Some(dbg);
         }
     }
 
@@ -521,8 +331,8 @@ impl Ppu {
 
             sprites.push(SpriteRow {
                 x: ox,
-                lo: self.ppu_read(lo_addr, cartridge),
-                hi: self.ppu_read(hi_addr, cartridge),
+                lo: self.ppu_read(lo_addr, cartridge, true),
+                hi: self.ppu_read(hi_addr, cartridge, true),
                 palette,
                 behind_bg,
                 flip_h,

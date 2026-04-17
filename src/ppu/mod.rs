@@ -125,10 +125,10 @@ impl Ppu {
     // ── PPU internal memory access ───────────────────────────────────────────
 
     /// Reads from PPU address space: pattern tables, nametables, palettes.
-    pub fn ppu_read(&self, addr: u16, cartridge: &Cartridge) -> u8 {
+    pub fn ppu_read(&self, addr: u16, cartridge: &Cartridge, is_sprite: bool) -> u8 {
         let addr = addr & 0x3FFF;
         match addr {
-            0x0000..=0x1FFF => cartridge.chr_read(addr),
+            0x0000..=0x1FFF => cartridge.chr_read(addr, is_sprite),
             0x2000..=0x3EFF => {
                 let mirrored = self.mirror_nametable(addr, cartridge);
                 self.vram[mirrored]
@@ -204,11 +204,11 @@ impl Ppu {
 
         if addr >= 0x3F00 {
             // Palette: immediate return; buffer gets the nametable mirror below
-            self.data_buffer = self.ppu_read(addr - 0x1000, cartridge);
-            self.ppu_read(addr, cartridge)
+            self.data_buffer = self.ppu_read(addr - 0x1000, cartridge, false);
+            self.ppu_read(addr, cartridge, false)
         } else {
             let result = self.data_buffer;
-            self.data_buffer = self.ppu_read(addr, cartridge);
+            self.data_buffer = self.ppu_read(addr, cartridge, false);
             result
         }
     }
@@ -279,6 +279,9 @@ impl Ppu {
         if !self.write_latch {
             // t: ....... ...ABCDE <- d: ABCDE... ;  x: <- d: .....FGH
             self.fine_x = val & 0x07;
+            if self.scanline >= 0 && self.scanline < 240 && (self.mask & 0x18) != 0 {
+                self.render_fine_x = self.fine_x;
+            }
             self.temp_vram_addr = (self.temp_vram_addr & 0xFFE0) | (val as u16 >> 3);
             self.write_latch = true;
         } else {
@@ -449,11 +452,11 @@ mod tests {
         let mut ppu = Ppu::new(Mirroring::Horizontal);
         let cart = make_cart();
         ppu.palette[0x00] = 0x3F;
-        assert_eq!(ppu.ppu_read(0x3F00, &cart), 0x3F);
-        assert_eq!(ppu.ppu_read(0x3F10, &cart), 0x3F); // mirrors $3F00
+        assert_eq!(ppu.ppu_read(0x3F00, &cart, false), 0x3F);
+        assert_eq!(ppu.ppu_read(0x3F10, &cart, false), 0x3F); // mirrors $3F00
         ppu.palette[0x04] = 0x2A;
-        assert_eq!(ppu.ppu_read(0x3F04, &cart), 0x2A);
-        assert_eq!(ppu.ppu_read(0x3F14, &cart), 0x2A); // mirrors $3F04
+        assert_eq!(ppu.ppu_read(0x3F04, &cart, false), 0x2A);
+        assert_eq!(ppu.ppu_read(0x3F14, &cart, false), 0x2A); // mirrors $3F04
     }
 
     #[test]
@@ -462,8 +465,8 @@ mod tests {
         let cart = make_cart();
         ppu.palette[0x01] = 0x11;
         ppu.palette[0x11] = 0x22;
-        assert_eq!(ppu.ppu_read(0x3F01, &cart), 0x11);
-        assert_eq!(ppu.ppu_read(0x3F11, &cart), 0x22);
+        assert_eq!(ppu.ppu_read(0x3F01, &cart, false), 0x11);
+        assert_eq!(ppu.ppu_read(0x3F11, &cart, false), 0x22);
     }
 
     #[test]
@@ -471,7 +474,7 @@ mod tests {
         let mut ppu = Ppu::new(Mirroring::Horizontal);
         let mut cart = make_cart();
         ppu.ppu_write(0x3F05, 0x17, &mut cart);
-        assert_eq!(ppu.ppu_read(0x3F05, &cart), 0x17);
+        assert_eq!(ppu.ppu_read(0x3F05, &cart, false), 0x17);
     }
 
     // ── Register semantics ────────────────────────────────────────────────────

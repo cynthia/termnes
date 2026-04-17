@@ -90,6 +90,7 @@ impl Bus {
     }
 
     fn ppu_register_write(&mut self, addr: u16, val: u8) {
+        self.cartridge.cpu_write(addr, val);
         self.ppu.cpu_write(addr, val, &mut self.cartridge)
     }
 
@@ -98,10 +99,10 @@ impl Bus {
     /// Advances the PPU by 3 cycles for each CPU cycle and clocks the APU frame counter.
     pub fn tick(&mut self, cpu_cycles: u8) {
         for _ in 0..cpu_cycles {
-            self.ppu.tick(&mut self.cartridge);
-            self.ppu.tick(&mut self.cartridge);
-            self.ppu.tick(&mut self.cartridge);
             self.cartridge.tick_cpu();
+            self.ppu.tick(&mut self.cartridge);
+            self.ppu.tick(&mut self.cartridge);
+            self.ppu.tick(&mut self.cartridge);
             let expansion_audio = self.cartridge.expansion_audio_sample();
             self.apu.set_expansion_audio_input(expansion_audio);
             self.apu.tick(1);
@@ -120,12 +121,20 @@ impl Bus {
 
     // ── OAM DMA ──────────────────────────────────────────────────────────────
 
-    /// Executes a pending OAM DMA transfer. Returns cycles consumed (0 if none pending).
+    /// Executes a pending OAM DMA transfer. Returns true if a transfer ran.
+    /// The CPU is halted for 513 or 514 cycles (extra cycle on odd CPU cycle alignment)
+    /// while PPU/APU/mapper continue to tick. Ticking is done internally, so callers
+    /// must NOT re-tick external components based on this call.
     /// Attribute bytes (OAM index % 4 == 2) have bits 2-4 hardwired to 0 on
     /// real hardware; mask on write so readback matches hardware.
-    pub fn do_dma(&mut self) -> u16 {
+    pub fn do_dma(&mut self) -> bool {
         if !self.dma_active {
-            return 0;
+            return false;
+        }
+        // 1 dummy wait cycle, plus a second if we started on an odd CPU cycle.
+        self.tick(1);
+        if self.total_cycles % 2 == 1 {
+            self.tick(1);
         }
         let base = (self.dma_page as u16) << 8;
         for i in 0u16..256 {
@@ -146,7 +155,7 @@ impl Bus {
             self.tick(1); // Write cycle
         }
         self.dma_active = false;
-        513 // 1 dummy + 512 read/write
+        true
     }
 
     // ── Debug ────────────────────────────────────────────────────────────────

@@ -48,7 +48,7 @@ impl Mapper for UnromMapper {
         }
     }
 
-    fn chr_read(&self, addr: u16) -> Option<u8> {
+    fn chr_read(&self, addr: u16, _is_sprite: bool) -> Option<u8> {
         if addr < 0x2000 {
             Some(self.chr_ram[addr as usize])
         } else {

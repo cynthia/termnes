@@ -37,17 +37,7 @@ impl Nes {
     /// Handles OAM DMA (513 CPU cycles halt CPU but keep PPU/APU running).
     pub fn step_frame(&mut self) {
         while !self.cpu.bus.ppu.frame_complete {
-            let dma_cycles = self.cpu.bus.do_dma();
-            if dma_cycles > 0 {
-                for _ in 0..dma_cycles as u32 {
-                    for _ in 0..3 {
-                        self.cpu.bus.ppu.tick(&mut self.cpu.bus.cartridge);
-                    }
-                    self.cpu.bus.cartridge.tick_cpu();
-                    let expansion_audio = self.cpu.bus.cartridge.expansion_audio_sample();
-                    self.cpu.bus.apu.set_expansion_audio_input(expansion_audio);
-                    self.cpu.bus.apu.tick(1);
-                }
+            if self.cpu.bus.do_dma() {
                 if self.cpu.bus.poll_nmi() {
                     self.cpu.nmi();
                 }

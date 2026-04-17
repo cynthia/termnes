@@ -125,8 +125,8 @@ impl Cartridge {
         self.mapper.cpu_write(addr, val);
     }
 
-    pub fn chr_read(&self, addr: u16) -> u8 {
-        self.mapper.chr_read(addr).unwrap_or(0)
+    pub fn chr_read(&self, addr: u16, is_sprite: bool) -> u8 {
+        self.mapper.chr_read(addr, is_sprite).unwrap_or(0)
     }
 
     pub fn chr_write(&mut self, addr: u16, val: u8) {

@@ -140,7 +140,7 @@ impl Mapper for Mmc1Mapper {
         }
     }
 
-    fn chr_read(&self, addr: u16) -> Option<u8> {
+    fn chr_read(&self, addr: u16, _is_sprite: bool) -> Option<u8> {
         if addr >= 0x2000 { return None; }
 
         if self.chr_is_ram {

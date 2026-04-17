@@ -41,6 +41,9 @@ pub struct Mmc5Mapper {
     in_frame: std::cell::Cell<bool>,
     scanline_counter: u8,
     watchdog: std::cell::Cell<u8>,
+
+    ppu_ctrl: u8,
+    ppu_mask: u8,
 }
 
 impl Mmc5Mapper {
@@ -78,6 +81,8 @@ impl Mmc5Mapper {
             in_frame: std::cell::Cell::new(false),
             scanline_counter: 0,
             watchdog: std::cell::Cell::new(0),
+            ppu_ctrl: 0,
+            ppu_mask: 0,
         }
     }
 
@@ -165,6 +170,8 @@ impl Mapper for Mmc5Mapper {
 
     fn cpu_write(&mut self, addr: u16, val: u8) {
         match addr {
+            0x2000 => self.ppu_ctrl = val,
+            0x2001 => self.ppu_mask = val,
             0x5100 => self.prg_mode = val & 0x03,
             0x5101 => self.chr_mode = val & 0x03,
             0x5102 => self.ram_protect_1 = val & 0x03,
@@ -207,7 +214,7 @@ impl Mapper for Mmc5Mapper {
         }
     }
 
-    fn chr_read(&self, addr: u16) -> Option<u8> {
+    fn chr_read(&self, addr: u16, is_sprite: bool) -> Option<u8> {
         if addr >= 0x2000 { return None; }
 
         if self.chr_is_ram {
@@ -217,20 +224,33 @@ impl Mapper for Mmc5Mapper {
         let num_banks = self.chr_rom.len() / 0x0400;
         if num_banks == 0 { return Some(0); }
 
+        let use_chr_b = !is_sprite && (self.ppu_ctrl & 0x20 != 0);
+        let chr_banks: &[usize] = if use_chr_b { &self.chr_banks_b } else { &self.chr_banks_a };
+
         let bank = match self.chr_mode {
-            0 => (self.chr_banks_a[7] & 0xFF8) | (addr as usize / 0x0400),
+            0 => {
+                let base = if use_chr_b { chr_banks[3] } else { chr_banks[7] };
+                (base & 0xFF8) | (addr as usize / 0x0400)
+            }
             1 => {
-                if addr < 0x1000 {
-                    (self.chr_banks_a[3] & 0xFFC) | (addr as usize / 0x0400)
+                let base = if use_chr_b {
+                    chr_banks[3]
+                } else if addr < 0x1000 {
+                    chr_banks[3]
                 } else {
-                    (self.chr_banks_a[7] & 0xFFC) | ((addr as usize - 0x1000) / 0x0400)
-                }
+                    chr_banks[7]
+                };
+                (base & 0xFFC) | ((addr as usize % 0x1000) / 0x0400)
             }
             2 => {
-                let idx = (addr as usize / 0x0800) * 2 + 1;
-                (self.chr_banks_a[idx] & 0xFFE) | ((addr as usize % 0x0800) / 0x0400)
+                let idx = if use_chr_b {
+                    (addr as usize / 0x0800) * 2 + 1
+                } else {
+                    (addr as usize / 0x0800) * 2 + 1
+                };
+                (chr_banks[idx.min(chr_banks.len() - 1)] & 0xFFE) | ((addr as usize % 0x0800) / 0x0400)
             }
-            3 => self.chr_banks_a[addr as usize / 0x0400],
+            3 => chr_banks[(addr as usize / 0x0400).min(chr_banks.len() - 1)],
             _ => unreachable!(),
         };
 
@@ -310,3 +330,4 @@ impl Mapper for Mmc5Mapper {
         }
     }
 }
+

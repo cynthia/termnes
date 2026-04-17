@@ -4,7 +4,7 @@ use crate::savestate::MapperState;
 pub trait Mapper {
     fn cpu_read(&self, addr: u16) -> Option<u8>;
     fn cpu_write(&mut self, addr: u16, val: u8);
-    fn chr_read(&self, addr: u16) -> Option<u8>;
+    fn chr_read(&self, addr: u16, is_sprite: bool) -> Option<u8>;
     fn chr_write(&mut self, addr: u16, val: u8);
     fn mirroring(&self) -> Mirroring {
         Mirroring::Horizontal
