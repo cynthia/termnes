@@ -21,6 +21,7 @@ pub mod cnrom;
 pub mod mmc1;
 pub mod mmc2;
 pub mod mmc3;
+pub mod axrom;
 
 pub use nrom::NromMapper;
 pub use unrom::UnromMapper;
@@ -28,3 +29,4 @@ pub use cnrom::CnromMapper;
 pub use mmc1::Mmc1Mapper;
 pub use mmc2::Mmc2Mapper;
 pub use mmc3::Mmc3Mapper;
+pub use axrom::AxromMapper;

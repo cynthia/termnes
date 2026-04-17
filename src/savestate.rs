@@ -159,6 +159,11 @@ pub struct JoypadState {
 #[derive(Serialize, Deserialize)]
 pub enum MapperState {
     Nrom,
+    Axrom {
+        prg_bank: usize,
+        chr_ram: Vec<u8>,
+        mirroring: u8,
+    },
     Unrom {
         bank_select: usize,
         chr_ram: Vec<u8>,
