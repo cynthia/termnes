@@ -1,4 +1,3 @@
-use crate::ppu::Mirroring;
 use crate::savestate::MapperState;
 use super::Mapper;
 

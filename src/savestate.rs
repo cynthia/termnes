@@ -169,6 +169,17 @@ pub enum MapperState {
         chr_mode: u8,
         prg_banks: Vec<usize>,
     },
+    Vrc6 {
+        prg_bank_16k: usize,
+        prg_bank_8k: usize,
+        chr_banks: Vec<usize>,
+        mirroring: u8,
+        irq_latch: u8,
+        irq_counter: u8,
+        irq_enable: bool,
+        irq_enable_after_ack: bool,
+        irq_pending: bool,
+    },
     Unrom {
         bank_select: usize,
         chr_ram: Vec<u8>,
