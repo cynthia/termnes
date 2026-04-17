@@ -95,6 +95,15 @@ impl Bus {
             self.ppu.tick(&mut self.cartridge);
             self.ppu.tick(&mut self.cartridge);
             self.apu.tick(1);
+
+            if self.apu.dmc.dma_request {
+                self.apu.dmc.dma_request = false;
+                let addr = self.apu.dmc.current_address;
+                let val = self.peek(addr);
+                self.apu.dmc.load_sample(val);
+                self.tick(3);
+            }
+
             self.total_cycles = self.total_cycles.wrapping_add(1);
         }
     }
@@ -154,7 +163,7 @@ impl Bus {
 
     /// Returns true if the APU IRQ line is currently asserted.
     pub fn poll_irq(&self) -> bool {
-        self.apu.frame_interrupt || self.cartridge.check_irq()
+        self.apu.frame_interrupt || self.apu.dmc.irq_pending || self.cartridge.check_irq()
     }
 
     /// Load battery-backed RAM from a `.sav` file if it exists.

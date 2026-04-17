@@ -124,6 +124,19 @@ pub struct NoiseState {
 #[derive(Serialize, Deserialize)]
 pub struct DmcState {
     pub output_level: u8,
+    pub irq_enable: bool,
+    pub loop_flag: bool,
+    pub rate_index: u8,
+    pub sample_address: u16,
+    pub sample_length: u16,
+    pub current_address: u16,
+    pub current_length: u16,
+    pub shift_register: u8,
+    pub bits_remaining: u8,
+    pub timer: u16,
+    pub sample_buffer: Option<u8>,
+    pub irq_pending: bool,
+    pub silence: bool,
 }
 
 #[derive(Serialize, Deserialize)]

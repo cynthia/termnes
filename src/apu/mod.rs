@@ -43,7 +43,7 @@ pub struct Apu {
     pulse2: Pulse,
     triangle: Triangle,
     noise: Noise,
-    dmc: Dmc,
+    pub dmc: Dmc,
 
     // ── Sample generation ─────────────────────────────────────────────────────
     even_cycle: bool,
@@ -133,6 +133,7 @@ impl Apu {
             // Clock channel timers ──────────────────────────────────────────
             // Triangle timer runs at CPU rate; pulse & noise at half-rate.
             self.triangle.clock_timer();
+            self.dmc.clock_timer();
             self.even_cycle = !self.even_cycle;
             if self.even_cycle {
                 self.pulse1.clock_timer();
@@ -258,6 +259,7 @@ impl Apu {
         self.pulse2.set_enabled(val & 0x02 != 0);
         self.triangle.set_enabled(val & 0x04 != 0);
         self.noise.set_enabled(val & 0x08 != 0);
+        self.dmc.write_status(val);
     }
 
     /// $4015 read: bits 0–3 = length counter > 0 per channel; bit 6 = frame
@@ -276,8 +278,14 @@ impl Apu {
         if self.noise.length_counter > 0 {
             r |= 0x08;
         }
+        if self.dmc.current_length > 0 {
+            r |= 0x10;
+        }
         if self.frame_interrupt {
             r |= 0x40;
+        }
+        if self.dmc.irq_pending {
+            r |= 0x80;
         }
         self.frame_interrupt = false;
         r
