@@ -44,6 +44,8 @@ pub struct Mmc5Mapper {
 
     ppu_ctrl: u8,
     ppu_mask: u8,
+
+    last_nt_addr: std::cell::Cell<u16>,
 }
 
 impl Mmc5Mapper {
@@ -83,6 +85,7 @@ impl Mmc5Mapper {
             watchdog: std::cell::Cell::new(0),
             ppu_ctrl: 0,
             ppu_mask: 0,
+            last_nt_addr: std::cell::Cell::new(0),
         }
     }
 
@@ -224,35 +227,38 @@ impl Mapper for Mmc5Mapper {
         let num_banks = self.chr_rom.len() / 0x0400;
         if num_banks == 0 { return Some(0); }
 
-        let use_chr_b = !is_sprite && (self.ppu_ctrl & 0x20 != 0);
+        let use_chr_b = !is_sprite && (self.exram_mode == 1 || (self.ppu_ctrl & 0x20 != 0));
         let chr_banks: &[usize] = if use_chr_b { &self.chr_banks_b } else { &self.chr_banks_a };
+        let map_addr = if use_chr_b && self.ppu_ctrl & 0x20 != 0 { addr % 0x1000 } else { addr };
 
-        let bank = match self.chr_mode {
+        let mut bank = match self.chr_mode {
             0 => {
-                let base = if use_chr_b { chr_banks[3] } else { chr_banks[7] };
-                (base & 0xFF8) | (addr as usize / 0x0400)
+                let base = chr_banks[chr_banks.len() - 1];
+                (base & 0xFF8) | (map_addr as usize / 0x0400)
             }
             1 => {
-                let base = if use_chr_b {
-                    chr_banks[3]
-                } else if addr < 0x1000 {
-                    chr_banks[3]
+                let base = if map_addr < 0x1000 {
+                    chr_banks[3.min(chr_banks.len() - 1)]
                 } else {
-                    chr_banks[7]
+                    chr_banks[7.min(chr_banks.len() - 1)]
                 };
-                (base & 0xFFC) | ((addr as usize % 0x1000) / 0x0400)
+                (base & 0xFFC) | ((map_addr as usize % 0x1000) / 0x0400)
             }
             2 => {
-                let idx = if use_chr_b {
-                    (addr as usize / 0x0800) * 2 + 1
-                } else {
-                    (addr as usize / 0x0800) * 2 + 1
-                };
-                (chr_banks[idx.min(chr_banks.len() - 1)] & 0xFFE) | ((addr as usize % 0x0800) / 0x0400)
+                let idx = (map_addr as usize / 0x0800) * 2 + 1;
+                (chr_banks[idx.min(chr_banks.len() - 1)] & 0xFFE) | ((map_addr as usize % 0x0800) / 0x0400)
             }
-            3 => chr_banks[(addr as usize / 0x0400).min(chr_banks.len() - 1)],
+            3 => chr_banks[(map_addr as usize / 0x0400).min(chr_banks.len() - 1)],
             _ => unreachable!(),
         };
+
+        if !is_sprite && self.exram_mode == 1 {
+            let last_nt = self.last_nt_addr.get();
+            let exram_byte = self.exram[(last_nt & 0x03FF) as usize];
+            bank = ((self.chr_high << 6) | (exram_byte as usize & 0x3F)) & 0xFF;
+            bank = (bank * 4) + ((addr as usize % 0x1000) / 0x0400); 
+            // the ExRAM provides the 4KB bank. The lower 2 bits of the 4KB bank come from the address.
+        }
 
         let offset = (addr as usize % 0x0400) + (bank % num_banks) * 0x0400;
         Some(self.chr_rom[offset])
@@ -273,6 +279,42 @@ impl Mapper for Mmc5Mapper {
         }
     }
 
+    fn mapper_ppu_read(&self, addr: u16) -> Option<u8> {
+        match addr {
+            0x2000..=0x2FFF => {
+                let nt_idx = (addr - 0x2000) / 0x0400;
+                let mapping = (self.nametable_mapping >> (nt_idx * 2)) & 0x03;
+                let is_attr = (addr & 0x03FF) >= 0x03C0;
+
+                if !is_attr {
+                    self.last_nt_addr.set(addr);
+                }
+
+                if mapping == 2 {
+                    if self.exram_mode == 0 || self.exram_mode == 1 {
+                        return Some(self.exram[(addr & 0x03FF) as usize]);
+                    }
+                } else if mapping == 3 {
+                    if is_attr {
+                        let color = self.fill_color;
+                        return Some(color | (color << 2) | (color << 4) | (color << 6));
+                    } else {
+                        return Some(self.fill_tile);
+                    }
+                }
+
+                if is_attr && self.exram_mode == 1 {
+                    let last_nt = self.last_nt_addr.get();
+                    let exram_byte = self.exram[(last_nt & 0x03FF) as usize];
+                    let palette = exram_byte >> 6;
+                    return Some(palette | (palette << 2) | (palette << 4) | (palette << 6));
+                }
+                
+                None
+            }
+            _ => None,
+        }
+    }
     fn check_irq(&self) -> bool {
         self.irq_pending.get() && self.irq_enable
     }

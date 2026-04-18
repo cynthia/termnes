@@ -127,6 +127,9 @@ impl Ppu {
     /// Reads from PPU address space: pattern tables, nametables, palettes.
     pub fn ppu_read(&self, addr: u16, cartridge: &Cartridge, is_sprite: bool) -> u8 {
         let addr = addr & 0x3FFF;
+        if let Some(val) = cartridge.mapper_ppu_read(addr) {
+            return val;
+        }
         match addr {
             0x0000..=0x1FFF => cartridge.chr_read(addr, is_sprite),
             0x2000..=0x3EFF => {

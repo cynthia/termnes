@@ -133,6 +133,10 @@ impl Cartridge {
         self.mapper.chr_write(addr, val);
     }
 
+    pub fn mapper_ppu_read(&self, addr: u16) -> Option<u8> {
+        self.mapper.mapper_ppu_read(addr)
+    }
+
     pub fn mirroring(&self) -> Mirroring {
         self.mapper.mirroring()
     }
