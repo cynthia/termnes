@@ -42,9 +42,18 @@ impl Ppu {
             self.status &= !0xE0;
         }
 
-        // ── MMC3 IRQ counter ─────────────────────────────────────────────────
-        if self.cycle == 260 && (self.scanline >= 0 && self.scanline < 240 || self.scanline == -1) && (self.mask & 0x18 != 0) {
-             cartridge.tick_scanline();
+        // ── Mapper scanline ticks ────────────────────────────────────────────
+        // MMC3 clocks on the late A12 rising edge (bg prefetch for the next
+        // scanline). MMC5's internal scanline counter fires against $5203
+        // at PPU cycle 4. Different mappers care about different cycles,
+        // so we dispatch two hooks per rendering scanline.
+        let is_render_line =
+            (self.scanline >= 0 && self.scanline < 240) || self.scanline == -1;
+        if self.cycle == 4 && is_render_line && (self.mask & 0x18 != 0) {
+            cartridge.tick_scanline_early();
+        }
+        if self.cycle == 260 && is_render_line && (self.mask & 0x18 != 0) {
+            cartridge.tick_scanline();
         }
 
         // ── Advance cycle / scanline ─────────────────────────────────────────
@@ -114,6 +123,18 @@ impl Ppu {
     fn bg_pixel(&self, x: u16, cartridge: &Cartridge) -> (u8, u8) {
         if self.mask & 0x08 == 0 || (x < 8 && self.mask & 0x02 == 0) {
             return (0, 0);
+        }
+
+        // MMC5 vertical split (used by Uchuu Keibitai SDF). The mapper
+        // decides per-tile whether to override the normal fetches.
+        if self.scanline >= 0 && self.scanline < SCREEN_HEIGHT as i16 {
+            let render_coarse_x = (self.render_vram_addr & 0x1F) as u8;
+            if let Some(split) = cartridge.split_fetch(self.scanline as u16, render_coarse_x) {
+                let bit = 7 - self.render_fine_x;
+                let color =
+                    (((split.pattern_hi >> bit) & 1) << 1) | ((split.pattern_lo >> bit) & 1);
+                return (color, split.palette);
+            }
         }
 
         let nt_addr = 0x2000 | (self.render_vram_addr & 0x0FFF);

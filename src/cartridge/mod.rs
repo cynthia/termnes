@@ -3,7 +3,7 @@ pub mod mapper;
 use crate::ppu::Mirroring;
 use mapper::{
     AxromMapper, CnromMapper, Mapper, Mmc1Mapper, Mmc2Mapper, Mmc3Mapper, Mmc5Mapper, NromMapper,
-    SunsoftFme7Mapper, UnromMapper, Vrc6Mapper, Vrc6Variant,
+    SplitFetch, SunsoftFme7Mapper, UnromMapper, Vrc6Mapper, Vrc6Variant,
 };
 use std::fs::File;
 use std::io::Read;
@@ -137,12 +137,39 @@ impl Cartridge {
         self.mapper.mapper_ppu_read(addr)
     }
 
+    pub fn split_fetch(&self, scanline: u16, coarse_x: u8) -> Option<SplitFetch> {
+        self.mapper.split_fetch(scanline, coarse_x)
+    }
+
+    #[doc(hidden)]
+    pub fn dbg_exram_mode(&self) -> Option<u8> { self.mapper.dbg_exram_mode() }
+    #[doc(hidden)]
+    pub fn dbg_nametable_mapping(&self) -> Option<u8> { self.mapper.dbg_nametable_mapping() }
+    #[doc(hidden)]
+    pub fn dbg_split_mode(&self) -> Option<u8> { self.mapper.dbg_split_mode() }
+    #[doc(hidden)]
+    pub fn dbg_chr_banks_a(&self) -> Option<[usize; 8]> { self.mapper.dbg_chr_banks_a() }
+    #[doc(hidden)]
+    pub fn dbg_chr_banks_b(&self) -> Option<[usize; 4]> { self.mapper.dbg_chr_banks_b() }
+    #[doc(hidden)]
+    pub fn dbg_chr_high(&self) -> Option<usize> { self.mapper.dbg_chr_high() }
+    #[doc(hidden)]
+    pub fn dbg_irq_target(&self) -> Option<u8> { self.mapper.dbg_irq_target() }
+
     pub fn mirroring(&self) -> Mirroring {
         self.mapper.mirroring()
     }
 
+    pub fn nt_ciram_bank(&self, nt_index: u8) -> u8 {
+        self.mapper.nt_ciram_bank(nt_index)
+    }
+
     pub fn tick_scanline(&mut self) {
         self.mapper.tick_scanline();
+    }
+
+    pub fn tick_scanline_early(&mut self) {
+        self.mapper.tick_scanline_early();
     }
 
     pub fn tick_cpu(&mut self) {

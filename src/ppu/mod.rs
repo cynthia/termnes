@@ -168,19 +168,16 @@ impl Ppu {
         }
     }
 
-    /// Maps a nametable address ($2000-$3EFF) to a VRAM index using the
-    /// cartridge mirroring mode. Returns index into `self.vram`.
+    /// Maps a nametable address ($2000-$3EFF) to a VRAM index. Routes
+    /// through `cartridge.nt_ciram_bank` so mappers with per-NT control
+    /// (MMC5) can pick a different CIRAM bank per nametable than the
+    /// coarse four-variant Mirroring enum allows.
     fn mirror_nametable(&self, addr: u16, cartridge: &Cartridge) -> usize {
         let addr = (addr - 0x2000) & 0x0FFF;
-        let table = (addr / 0x0400) as usize; // 0-3
+        let table = (addr / 0x0400) as u8;
         let offset = (addr % 0x0400) as usize;
-        let mapped = match cartridge.mirroring() {
-            Mirroring::Horizontal => [0, 0, 1, 1][table],
-            Mirroring::Vertical   => [0, 1, 0, 1][table],
-            Mirroring::OneScreenLow => [0, 0, 0, 0][table],
-            Mirroring::OneScreenHigh => [1, 1, 1, 1][table],
-        };
-        mapped * 0x0400 + offset
+        let bank = cartridge.nt_ciram_bank(table) as usize;
+        bank * 0x0400 + offset
     }
 
     // ── CPU-facing register reads ($2002, $2004, $2007) ──────────────────────
