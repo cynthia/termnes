@@ -276,6 +276,8 @@ impl Mapper for Mmc5Mapper {
         match self.nametable_mapping {
             0x44 => Mirroring::Vertical,
             0x50 => Mirroring::Horizontal,
+            0x00 => Mirroring::OneScreenLow,
+            0x55 => Mirroring::OneScreenHigh,
             // Fallback for games assuming default boot state
             _ => Mirroring::Vertical,
         }
@@ -292,27 +294,32 @@ impl Mapper for Mmc5Mapper {
                     self.last_nt_addr.set(addr);
                 }
 
-                if mapping == 2 {
-                    if self.exram_mode == 0 || self.exram_mode == 1 {
-                        return Some(self.exram[(addr & 0x03FF) as usize]);
-                    }
-                } else if mapping == 3 {
-                    if is_attr {
-                        let color = self.fill_color;
-                        return Some(color | (color << 2) | (color << 4) | (color << 6));
-                    } else {
-                        return Some(self.fill_tile);
-                    }
-                }
-
                 if is_attr && self.exram_mode == 1 {
                     let last_nt = self.last_nt_addr.get();
                     let exram_byte = self.exram[(last_nt & 0x03FF) as usize];
                     let palette = exram_byte >> 6;
                     return Some(palette | (palette << 2) | (palette << 4) | (palette << 6));
                 }
-                
-                None
+
+                match mapping {
+                    0 | 1 => None,
+                    2 => {
+                        if self.exram_mode != 0 {
+                            Some(self.exram[(addr & 0x03FF) as usize])
+                        } else {
+                            Some(0)
+                        }
+                    }
+                    3 => {
+                        if is_attr {
+                            let color = self.fill_color;
+                            Some(color | (color << 2) | (color << 4) | (color << 6))
+                        } else {
+                            Some(self.fill_tile)
+                        }
+                    }
+                    _ => unreachable!(),
+                }
             }
             _ => None,
         }
