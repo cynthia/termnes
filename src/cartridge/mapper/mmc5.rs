@@ -227,6 +227,7 @@ impl Mapper for Mmc5Mapper {
         let num_banks = self.chr_rom.len() / 0x0400;
         if num_banks == 0 { return Some(0); }
 
+        let is_bg = !is_sprite;
         let use_chr_b = !is_sprite && (self.exram_mode == 1 || (self.ppu_ctrl & 0x20 != 0));
         let chr_banks: &[usize] = if use_chr_b { &self.chr_banks_b } else { &self.chr_banks_a };
         let map_addr = if use_chr_b && self.ppu_ctrl & 0x20 != 0 { addr % 0x1000 } else { addr };
@@ -252,12 +253,13 @@ impl Mapper for Mmc5Mapper {
             _ => unreachable!(),
         };
 
-        if !is_sprite && self.exram_mode == 1 {
+        if is_bg && self.exram_mode == 1 {
             let last_nt = self.last_nt_addr.get();
             let exram_byte = self.exram[(last_nt & 0x03FF) as usize];
-            bank = ((self.chr_high << 6) | (exram_byte as usize & 0x3F)) & 0xFF;
-            bank = (bank * 4) + ((addr as usize % 0x1000) / 0x0400); 
-            // the ExRAM provides the 4KB bank. The lower 2 bits of the 4KB bank come from the address.
+            // The exram byte specifies a 4KB CHR bank, ignoring bits 5128-512B.
+            // The 4KB bank is essentially an index into 4KB pages.
+            let bank_4k = (self.chr_high << 6) | (exram_byte as usize & 0x3F);
+            bank = (bank_4k * 4) + ((addr as usize % 0x1000) / 0x0400);
         }
 
         let offset = (addr as usize % 0x0400) + (bank % num_banks) * 0x0400;
