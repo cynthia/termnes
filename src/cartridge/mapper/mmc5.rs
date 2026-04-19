@@ -288,22 +288,34 @@ impl Mapper for Mmc5Mapper {
         // ($5120-$5127 = A, $5128-$512B = B) regardless of PPUCTRL bit 5.
         // Uchuu Keibitai SDF uses this path to copy its title nametable
         // out of CHR ROM and into VRAM during forced blank.
+        // Real MMC5 separates BG/sprite bank register sets only when the PPU
+        // is actually doing sprite fetches — that is, 8x16 mode (PPUCTRL bit
+        // 5) AND sprite rendering enabled (PPUMASK bit 4). When sprites are
+        // disabled but BG is on, no set-A / set-B switching happens during
+        // the scanline; BG falls back to set A. Uchuu Keibitai SDF's
+        // stage-1 intro renders with 8x16 mode selected but sprites masked
+        // off; the scene tiles live in set A, and set B still holds the
+        // tile-index source the game copied out of CHR ROM into VRAM.
+        // ExGraphic mode (exram_mode 1) keeps its own routing: BG always
+        // uses set B there, regardless of sprite enable.
         let use_chr_b = if !self.in_frame.get() {
             self.last_written_chr_set_b.get()
+        } else if self.exram_mode == 1 {
+            !is_sprite
         } else {
-            !is_sprite && (self.exram_mode == 1 || (self.ppu_ctrl & 0x20 != 0))
+            !is_sprite
+                && (self.ppu_ctrl & 0x20 != 0)
+                && (self.ppu_mask & 0x10 != 0)
         };
         let chr_banks: &[usize] = if use_chr_b { &self.chr_banks_b } else { &self.chr_banks_a };
-        let map_addr = if use_chr_b && self.ppu_ctrl & 0x20 != 0 { addr % 0x1000 } else { addr };
+        // Set B covers only 4KB natively (banks $5128-$512B). Real MMC5
+        // mirrors set B every $1000 across the full $0000-$1FFF PPU range,
+        // not just when 8x16 sprites are enabled — $2007 reads during
+        // forced blank also follow the last-written set, and those reads
+        // can target $1000+. UKSDF copies its stage-1 NT out of CHR ROM
+        // via that path, so the fold has to be unconditional.
+        let map_addr = if use_chr_b { addr % 0x1000 } else { addr };
 
-        // MMC5 bank registers hold a bank NUMBER in the current chr_mode's
-        // granularity: 8KB in mode 0, 4KB in mode 1, 2KB in mode 2, 1KB
-        // in mode 3. To get the 1KB-bank offset into CHR ROM we must
-        // SHIFT the register by the mode's granularity (× 8, × 4, × 2,
-        // × 1) and then OR in the sub-bank bits from the PPU address.
-        // Metal Slader Glory is the only MMC5 title that uses mode 1 and
-        // exposes this; our earlier "mask low bits and OR" math treated
-        // the register as already in 1KB units (off by a factor of 4).
         let mut bank = match self.chr_mode {
             0 => {
                 let base = chr_banks[chr_banks.len() - 1];
@@ -430,6 +442,7 @@ impl Mapper for Mmc5Mapper {
     fn dbg_chr_banks_b(&self) -> Option<[usize; 4]> { Some(self.chr_banks_b) }
     fn dbg_chr_high(&self) -> Option<usize> { Some(self.chr_high) }
     fn dbg_irq_target(&self) -> Option<u8> { Some(self.irq_target) }
+    fn dbg_chr_mode(&self) -> Option<u8> { Some(self.chr_mode) }
 
     fn split_fetch(&self, scanline: u16, coarse_x: u8) -> Option<SplitFetch> {
         if self.split_mode & 0x80 == 0 {

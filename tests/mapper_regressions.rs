@@ -257,6 +257,62 @@ fn mmc5_vertical_split_overrides_bg_in_split_region() {
 }
 
 #[test]
+fn mmc5_bg_fetch_uses_set_a_when_sprite_rendering_disabled() {
+    // MMC5 separates BG/sprite bank register sets only when sprite rendering
+    // is actually happening — nesdev wiki: "Only when Z is set and at least
+    // one E bit is set does the MMC5 draw 8x16 sprites from eight independent
+    // banks." The implication is that the "sprite bank set kicks in" part
+    // requires PPUMASK bit 4 (show sprites). When sprites are masked off but
+    // 8x16 is still selected in PPUCTRL, the PPU doesn't switch banks between
+    // BG and sprite phases, so BG fetches stay on set A.
+    //
+    // Uchuu Keibitai SDF's stage-1 intro runs with PPUCTRL=$B0 (8x16 + NMI)
+    // and PPUMASK=$1A (BG on, sprites off). The scene tiles live in set A;
+    // set B holds the tile-index source the game already copied out of CHR
+    // ROM into NT0 via $2007. With the naive rule, BG would erroneously
+    // fetch from set B and render a mosaic of the tile-index bytes.
+    let mut chr = vec![0u8; 0x4000]; // 16KB = 16 × 1KB banks
+    chr[0x0000] = 0xA1; // bank 0 offset 0 (set A default)
+    chr[0x1000] = 0xB1; // bank 4 offset 0 (set B default)
+    let mut mapper = Mmc5Mapper::new(vec![0u8; 0x8000], chr);
+    mapper.cpu_write(0x5101, 3); // chr_mode 3 (1KB banks)
+    mapper.cpu_write(0x5120, 0); // set A[0] = bank 0 → tile there = 0xA1
+    mapper.cpu_write(0x5128, 4); // set B[0] = bank 4 → tile there = 0xB1
+
+    // Promote to in-frame by calling tick_scanline_early twice (mirrors the
+    // Mesen two-stage need_in_frame → in_frame transition). CHR reads between
+    // ticks keep ppu_idle armed so tick_cpu doesn't drop in_frame.
+    let prime_in_frame = |m: &mut Mmc5Mapper| {
+        m.tick_scanline_early();
+        let _ = m.chr_read(0x0000, false);
+        m.tick_scanline_early();
+        let _ = m.chr_read(0x0000, false);
+    };
+
+    // 8x16 sprites ON (PPUCTRL bit 5), sprite rendering ON (PPUMASK bit 4):
+    // BG should use set B.
+    mapper.cpu_write(0x2000, 0x20);
+    mapper.cpu_write(0x2001, 0x18); // bg+sprites on
+    prime_in_frame(&mut mapper);
+    assert_eq!(
+        mapper.chr_read(0x0000, false),
+        Some(0xB1),
+        "BG fetch with 8x16 + sprites enabled should use set B"
+    );
+
+    // Same PPUCTRL, but PPUMASK bit 4 cleared (sprite rendering off). BG
+    // reverts to set A because the sprite-bank-switching feature isn't
+    // engaged for this scanline.
+    mapper.cpu_write(0x2001, 0x08); // bg on, sprites off
+    prime_in_frame(&mut mapper);
+    assert_eq!(
+        mapper.chr_read(0x0000, false),
+        Some(0xA1),
+        "with sprites masked off, 8x16 BG fetch should fall back to set A"
+    );
+}
+
+#[test]
 fn mmc5_scanline_irq_fires_every_frame() {
     // MMC5 distinguishes "in-frame" from "between frames" via a watchdog
     // that should drain during VBlank so the counter resets at each frame's

@@ -155,6 +155,8 @@ impl Cartridge {
     pub fn dbg_chr_high(&self) -> Option<usize> { self.mapper.dbg_chr_high() }
     #[doc(hidden)]
     pub fn dbg_irq_target(&self) -> Option<u8> { self.mapper.dbg_irq_target() }
+    #[doc(hidden)]
+    pub fn dbg_chr_mode(&self) -> Option<u8> { self.mapper.dbg_chr_mode() }
 
     pub fn mirroring(&self) -> Mirroring {
         self.mapper.mirroring()

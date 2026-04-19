@@ -68,6 +68,8 @@ pub trait Mapper {
     fn dbg_chr_high(&self) -> Option<usize> { None }
     #[doc(hidden)]
     fn dbg_irq_target(&self) -> Option<u8> { None }
+    #[doc(hidden)]
+    fn dbg_chr_mode(&self) -> Option<u8> { None }
     fn save_mapper_state(&self) -> MapperState;
     fn load_mapper_state(&mut self, state: &MapperState);
 }
