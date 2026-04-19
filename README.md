@@ -1,7 +1,9 @@
 # Termnes
 
 A terminal-based NES/Famicom emulator written in Rust.
-Supports UNROM, MMC1, MMC2, and MMC3.
+
+Supported mappers: NROM (0), MMC1 (1), UNROM (2), CNROM (3), MMC3 (4),
+MMC5 (5), AxROM (7), MMC2 (9), VRC6a/b (24/26), Sunsoft FME-7 (69).
 
 ## Run
 ```bash
@@ -9,6 +11,9 @@ cargo run --release -- <path-to-rom.nes>
 ```
 
 ### Controls
+
+One player only.
+
 | Key        | Action   |
 |------------|----------|
 | Arrow keys | D-Pad    |
@@ -64,6 +69,14 @@ host you can forward audio over TCP to a local `listen` process:
    ```
 
 The wire format is raw 16-bit signed PCM at 44.1 kHz mono, little-endian.
+
+## Rendering
+
+The framebuffer is drawn with one terminal cell per two vertical pixels,
+using `▀` (upper half block) with the top pixel as the foreground color
+and the bottom pixel as the background color — so a 256×240 NES frame
+maps to 256×120 terminal cells. Cells unchanged since the previous frame
+are skipped; so are redundant color changes within a row.
 
 ## Terminal Configuration
 

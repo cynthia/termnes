@@ -1,2 +1,49 @@
+# ── Project ────────────────────────────────────────────────────────────────
 /target
 /roms
+/bugs
+
+# ── Rust ───────────────────────────────────────────────────────────────────
+# Cargo build products outside the default /target (benchmarks, examples, etc)
+**/target/
+# Generated lockfiles for libraries get committed; for binaries either way
+# works. This repo ships both a lib and a bin, so we keep Cargo.lock.
+# Rustc/rustfmt incremental caches
+**/*.rs.bk
+# mdBook / rustdoc output
+/book/
+
+# ── macOS ──────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.apdisk
+.VolumeIcon.icns
+
+# ── Linux ──────────────────────────────────────────────────────────────────
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ── Editor / tooling ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~.nib
+
+# ── Agent / assistant configs ──────────────────────────────────────────────
+.claude/
+
+# ── Patch / merge leftovers ────────────────────────────────────────────────
+*.orig
+*.rej
+*.patch
