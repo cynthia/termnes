@@ -3,8 +3,8 @@ use crate::savestate::MapperState;
 use super::Mapper;
 
 /// One of the three Sunsoft 5B tone channels. The 5B is a YM2149F variant —
-/// each channel is a 12-bit-period square wave with a 4-bit linear volume and
-/// a tone-enable bit from the mixer register (7). Envelope and noise aren't
+/// each channel is a 12-bit-period square wave with a 4-bit volume and a
+/// tone-enable bit from the mixer register (7). Envelope and noise aren't
 /// implemented; NES music drivers seen in the wild (Gimmick!, Batman RoJ) use
 /// only per-channel tone + volume.
 #[derive(Clone, Copy, Default)]
@@ -15,6 +15,15 @@ struct Fme7Channel {
     timer: u16,
     phase: bool,
 }
+
+/// YM2149F logarithmic volume curve (3 dB per step). The chip exposes a 4-bit
+/// volume but each step is √2 louder than the previous, so a linear mapping
+/// makes quiet notes dominate and loud notes sound muted. Table normalised so
+/// level 15 → 1.0.
+const FME7_VOLUME_TABLE: [f32; 16] = [
+    0.0000, 0.0078, 0.0110, 0.0156, 0.0221, 0.0312, 0.0442, 0.0625,
+    0.0884, 0.1250, 0.1768, 0.2500, 0.3536, 0.5000, 0.7071, 1.0000,
+];
 
 impl Fme7Channel {
     /// Clocked at CPU/16 per the datasheet's tone divider. The channel flips
@@ -28,11 +37,11 @@ impl Fme7Channel {
         }
     }
 
-    fn output(&self) -> u8 {
-        if self.tone_disabled {
-            return 0;
+    fn output(&self) -> f32 {
+        if self.tone_disabled || !self.phase {
+            return 0.0;
         }
-        if self.phase { self.volume } else { 0 }
+        FME7_VOLUME_TABLE[(self.volume & 0x0F) as usize]
     }
 }
 
@@ -249,14 +258,14 @@ impl Mapper for SunsoftFme7Mapper {
     }
 
     fn expansion_audio_sample(&self) -> f32 {
-        let sum: u32 = self
-            .audio_channels
-            .iter()
-            .map(|c| c.output() as u32)
-            .sum();
-        // Three 4-bit channels → max sum = 45. Scale to ~0.12 peak, matching
-        // the VRC6 mixer amplitude.
-        (sum as f32 / 45.0) * 0.12
+        // YM2149F volume steps are logarithmic (≈3 dB/step), so in-game
+        // volumes sit in the middle of the 4-bit range and the numeric
+        // output is well below 1.0 per channel. The 2A03 pulse mixer peaks
+        // near 0.26 after its non-linear curve, so the scale here is tuned
+        // so typical Gimmick! playback lands in the same ballpark instead
+        // of being buried in the stock channels.
+        let sum: f32 = self.audio_channels.iter().map(|c| c.output()).sum();
+        sum * 0.35
     }
 
     fn check_irq(&self) -> bool {
