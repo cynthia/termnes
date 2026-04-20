@@ -2,6 +2,130 @@ use crate::ppu::Mirroring;
 use crate::savestate::MapperState;
 use super::{Mapper, SplitFetch};
 
+/// One of MMC5's two pulse channels. Close enough to a 2A03 pulse for game
+/// music: 11-bit period, 4 duties, length counter, envelope generator. No
+/// sweep unit (the MMC5 omits it) and no hard-wired frame counter — this
+/// channel's envelope/length ticks come from the mapper's own prescaler.
+#[derive(Clone, Copy)]
+struct Mmc5Pulse {
+    enabled: bool,
+    duty: u8,
+    duty_pos: u8,
+    timer_period: u16,
+    timer_counter: u16,
+    length_counter: u8,
+    length_halt: bool,
+    constant_volume: bool,
+    volume: u8,
+    envelope_start: bool,
+    envelope_divider: u8,
+    envelope_decay: u8,
+}
+
+const MMC5_DUTY_TABLE: [[u8; 8]; 4] = [
+    [0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 1, 1, 0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 1, 0, 0, 0],
+    [1, 0, 0, 1, 1, 1, 1, 1],
+];
+
+const LENGTH_TABLE: [u8; 32] = [
+    10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
+    12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30,
+];
+
+impl Mmc5Pulse {
+    fn new() -> Self {
+        Self {
+            enabled: false,
+            duty: 0,
+            duty_pos: 0,
+            timer_period: 0,
+            timer_counter: 0,
+            length_counter: 0,
+            length_halt: false,
+            constant_volume: false,
+            volume: 0,
+            envelope_start: false,
+            envelope_divider: 0,
+            envelope_decay: 0,
+        }
+    }
+
+    fn write_register(&mut self, reg: u8, val: u8) {
+        match reg {
+            0 => {
+                self.duty = (val >> 6) & 3;
+                self.length_halt = val & 0x20 != 0;
+                self.constant_volume = val & 0x10 != 0;
+                self.volume = val & 0x0F;
+            }
+            2 => self.timer_period = (self.timer_period & 0x0700) | val as u16,
+            3 => {
+                self.timer_period = (self.timer_period & 0x00FF) | ((val as u16 & 7) << 8);
+                if self.enabled {
+                    self.length_counter = LENGTH_TABLE[(val >> 3) as usize];
+                }
+                self.duty_pos = 0;
+                self.envelope_start = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn clock_timer(&mut self) {
+        if self.timer_counter == 0 {
+            self.timer_counter = self.timer_period;
+            self.duty_pos = (self.duty_pos + 1) & 7;
+        } else {
+            self.timer_counter -= 1;
+        }
+    }
+
+    fn clock_envelope(&mut self) {
+        if self.envelope_start {
+            self.envelope_start = false;
+            self.envelope_decay = 15;
+            self.envelope_divider = self.volume;
+        } else if self.envelope_divider == 0 {
+            self.envelope_divider = self.volume;
+            if self.envelope_decay > 0 {
+                self.envelope_decay -= 1;
+            } else if self.length_halt {
+                self.envelope_decay = 15;
+            }
+        } else {
+            self.envelope_divider -= 1;
+        }
+    }
+
+    fn clock_length_counter(&mut self) {
+        if !self.length_halt && self.length_counter > 0 {
+            self.length_counter -= 1;
+        }
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.length_counter = 0;
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if !self.enabled || self.length_counter == 0 {
+            return 0;
+        }
+        if self.timer_period < 8 {
+            return 0;
+        }
+        if MMC5_DUTY_TABLE[self.duty as usize][self.duty_pos as usize] == 0 {
+            return 0;
+        }
+        if self.constant_volume { self.volume } else { self.envelope_decay }
+    }
+}
+
 /// MMC5 (Mapper 5) — Advanced mapper with EXRAM, large ROM support, and extra audio.
 /// This is a basic implementation supporting PRG/CHR banking to allow games to boot.
 pub struct Mmc5Mapper {
@@ -67,6 +191,17 @@ pub struct Mmc5Mapper {
     split_mode: u8,    // $5200: bit 7 enable, bit 6 side (1=right), bits 4-0 tile
     split_scroll: u8,  // $5201: Y pixel scroll (0-239) for the split region
     split_bank: u8,    // $5202: 4KB CHR bank for split tiles
+
+    // Expansion audio: 2 pulse channels + a raw-PCM channel. Clocked off
+    // the CPU via `audio_cycle_counter`; at ~7457 CPU cycles per
+    // quarter-frame we get the same envelope / length cadence as 2A03.
+    audio_pulse1: Mmc5Pulse,
+    audio_pulse2: Mmc5Pulse,
+    audio_pcm_value: u8,
+    audio_pcm_write_mode: bool,
+    audio_timer_div: u8,
+    audio_cycle_counter: u32,
+    audio_frame_step: u8,
 }
 
 impl Mmc5Mapper {
@@ -125,6 +260,13 @@ impl Mmc5Mapper {
             split_mode: 0,
             split_scroll: 0,
             split_bank: 0,
+            audio_pulse1: Mmc5Pulse::new(),
+            audio_pulse2: Mmc5Pulse::new(),
+            audio_pcm_value: 0,
+            audio_pcm_write_mode: true,
+            audio_timer_div: 0,
+            audio_cycle_counter: 0,
+            audio_frame_step: 0,
         }
     }
 
@@ -214,6 +356,18 @@ impl Mapper for Mmc5Mapper {
         match addr {
             0x2000 => self.ppu_ctrl = val,
             0x2001 => self.ppu_mask = val,
+            0x5000..=0x5003 => self.audio_pulse1.write_register((addr - 0x5000) as u8, val),
+            0x5004..=0x5007 => self.audio_pulse2.write_register((addr - 0x5004) as u8, val),
+            0x5010 => self.audio_pcm_write_mode = val & 0x01 == 0,
+            0x5011 => {
+                if self.audio_pcm_write_mode {
+                    self.audio_pcm_value = val;
+                }
+            }
+            0x5015 => {
+                self.audio_pulse1.set_enabled(val & 0x01 != 0);
+                self.audio_pulse2.set_enabled(val & 0x02 != 0);
+            }
             0x5100 => self.prg_mode = val & 0x03,
             0x5101 => self.chr_mode = val & 0x03,
             0x5102 => self.ram_protect_1 = val & 0x03,
@@ -546,6 +700,34 @@ impl Mapper for Mmc5Mapper {
                 self.need_in_frame.set(false);
             }
         }
+
+        // Pulse timers clock at APU half-rate (one step per 2 CPU cycles).
+        self.audio_timer_div ^= 1;
+        if self.audio_timer_div == 0 {
+            self.audio_pulse1.clock_timer();
+            self.audio_pulse2.clock_timer();
+        }
+
+        // 4-step frame counter at ~240 Hz (7457 CPU cycles per quarter-frame).
+        // Quarter-frame events clock the envelope; half-frame events (steps
+        // 1 and 3) additionally clock the length counter.
+        self.audio_cycle_counter += 1;
+        if self.audio_cycle_counter >= 7457 {
+            self.audio_cycle_counter = 0;
+            self.audio_pulse1.clock_envelope();
+            self.audio_pulse2.clock_envelope();
+            if self.audio_frame_step == 1 || self.audio_frame_step == 3 {
+                self.audio_pulse1.clock_length_counter();
+                self.audio_pulse2.clock_length_counter();
+            }
+            self.audio_frame_step = (self.audio_frame_step + 1) & 3;
+        }
+    }
+
+    fn expansion_audio_sample(&self) -> f32 {
+        let pulse_mix = (self.audio_pulse1.output() as f32 + self.audio_pulse2.output() as f32) / 30.0;
+        let pcm = self.audio_pcm_value as f32 / 255.0;
+        (pulse_mix * 0.12) + (pcm * 0.10)
     }
 
     fn save_mapper_state(&self) -> MapperState {

@@ -358,6 +358,48 @@ fn mmc5_scanline_irq_fires_every_frame() {
 }
 
 #[test]
+fn mmc5_audio_pulse_produces_nonzero_sample_after_enable() {
+    // MMC5 pulse1 mirrors the 2A03 layout at $5000-$5003. After programming
+    // a period > 8, enabling the channel via $5015, and letting the timer
+    // step through a duty cycle, the mapper should emit a nonzero sample.
+    let mut mapper = Mmc5Mapper::new(vec![0u8; 0x8000], vec![0u8; 0x2000]);
+    // Enable pulse1 first — length counter is gated on the channel being
+    // enabled at the time $5003 is written, same as the 2A03.
+    mapper.cpu_write(0x5015, 0x01);
+    // Pulse1 control: constant volume, max level, 50% duty.
+    mapper.cpu_write(0x5000, 0b1011_1111);
+    // Period low / high = 0x100 (above the 8-tick mute threshold).
+    mapper.cpu_write(0x5002, 0x00);
+    mapper.cpu_write(0x5003, 0x01);
+
+    let mut saw_high = false;
+    for _ in 0..4096 {
+        mapper.tick_cpu();
+        if mapper.expansion_audio_sample() > 0.0 {
+            saw_high = true;
+            break;
+        }
+    }
+    assert!(saw_high, "pulse1 should produce a nonzero sample after enable");
+}
+
+#[test]
+fn mmc5_audio_pcm_register_sets_output_directly() {
+    // $5011 is a raw 8-bit DAC when $5010 bit 0 = 0 (write mode, the default).
+    let mut mapper = Mmc5Mapper::new(vec![0u8; 0x8000], vec![0u8; 0x2000]);
+    assert_eq!(mapper.expansion_audio_sample(), 0.0, "silent at boot");
+    mapper.cpu_write(0x5011, 200);
+    assert!(mapper.expansion_audio_sample() > 0.05, "PCM write should lift output");
+    // Switching to read mode (bit 0 = 1) makes $5011 writes a no-op.
+    mapper.cpu_write(0x5010, 0x01);
+    mapper.cpu_write(0x5011, 0);
+    assert!(
+        mapper.expansion_audio_sample() > 0.05,
+        "write-mode disabled: $5011 write should not change the held PCM value"
+    );
+}
+
+#[test]
 fn vrc6_uses_chr_ram_when_chr_rom_is_absent() {
     let mut mapper = Vrc6Mapper::new(vec![0; 0x10000], Vec::new(), Vrc6Variant::Vrc6a);
     mapper.chr_write(0x0456, 0xA5);
