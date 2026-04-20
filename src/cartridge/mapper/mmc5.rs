@@ -725,9 +725,23 @@ impl Mapper for Mmc5Mapper {
     }
 
     fn expansion_audio_sample(&self) -> f32 {
-        let pulse_mix = (self.audio_pulse1.output() as f32 + self.audio_pulse2.output() as f32) / 30.0;
-        let pcm = self.audio_pcm_value as f32 / 255.0;
-        (pulse_mix * 0.12) + (pcm * 0.10)
+        // MMC5's pulse channels share the 2A03's non-linear pulse DAC curve,
+        // which amplifies mid-range volume values significantly. A plain
+        // linear sum sounds buried behind the stock channels; using the same
+        // formula the APU mixer applies to its pulses lets the MMC5 voices
+        // sit at the same amplitude as $4000-$4007 pulses in Just Breed /
+        // Laser Invasion / CV3 JP.
+        let p1 = self.audio_pulse1.output() as f32;
+        let p2 = self.audio_pulse2.output() as f32;
+        let pulse_out = if p1 + p2 > 0.0 {
+            95.88 / (8128.0 / (p1 + p2) + 100.0)
+        } else {
+            0.0
+        };
+        // The raw $5011 DAC goes through a similar amplifier stage to the
+        // 2A03 DMC on real boards, so scale it so max PCM ≈ 2A03 DMC peak.
+        let pcm = self.audio_pcm_value as f32 / 255.0 * 0.5;
+        pulse_out + pcm
     }
 
     fn save_mapper_state(&self) -> MapperState {
