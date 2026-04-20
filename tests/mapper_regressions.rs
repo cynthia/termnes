@@ -400,6 +400,46 @@ fn mmc5_audio_pcm_register_sets_output_directly() {
 }
 
 #[test]
+fn sunsoft_fme7_audio_produces_nonzero_sample_after_channel_programmed() {
+    // 5B audio: $C000 selects a register (0-15), $E000 writes the value.
+    // With channel A tone enabled (mixer bit 0 = 0), period > 0, and volume
+    // > 0, the tone oscillator should eventually produce a nonzero sample.
+    let mut mapper = SunsoftFme7Mapper::new(vec![0u8; 0x8000], vec![0u8; 0x2000]);
+    // Register 0 = channel A period low = 0x10 (small period → fast toggles).
+    mapper.cpu_write(0xC000, 0);
+    mapper.cpu_write(0xE000, 0x10);
+    // Register 7 = mixer. Bit 0 clear → channel A tone enabled.
+    mapper.cpu_write(0xC000, 7);
+    mapper.cpu_write(0xE000, 0b0011_1110);
+    // Register 8 = channel A level = 15 (max volume).
+    mapper.cpu_write(0xC000, 8);
+    mapper.cpu_write(0xE000, 0x0F);
+
+    // Clock enough CPU cycles for the prescaler + timer to roll through at
+    // least one phase transition.
+    let mut saw_high = false;
+    for _ in 0..512 {
+        mapper.tick_cpu();
+        if mapper.expansion_audio_sample() > 0.0 {
+            saw_high = true;
+        }
+    }
+    assert!(saw_high, "expected a nonzero audio sample after programming channel A");
+
+    // Clearing the mixer tone-enable should silence the channel.
+    mapper.cpu_write(0xC000, 7);
+    mapper.cpu_write(0xE000, 0b0011_1111);
+    for _ in 0..512 {
+        mapper.tick_cpu();
+        assert_eq!(
+            mapper.expansion_audio_sample(),
+            0.0,
+            "audio should be silent with tone disabled"
+        );
+    }
+}
+
+#[test]
 fn vrc6_uses_chr_ram_when_chr_rom_is_absent() {
     let mut mapper = Vrc6Mapper::new(vec![0; 0x10000], Vec::new(), Vrc6Variant::Vrc6a);
     mapper.chr_write(0x0456, 0xA5);

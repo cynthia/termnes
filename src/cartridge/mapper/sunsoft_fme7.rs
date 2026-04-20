@@ -2,8 +2,43 @@ use crate::ppu::Mirroring;
 use crate::savestate::MapperState;
 use super::Mapper;
 
+/// One of the three Sunsoft 5B tone channels. The 5B is a YM2149F variant —
+/// each channel is a 12-bit-period square wave with a 4-bit linear volume and
+/// a tone-enable bit from the mixer register (7). Envelope and noise aren't
+/// implemented; NES music drivers seen in the wild (Gimmick!, Batman RoJ) use
+/// only per-channel tone + volume.
+#[derive(Clone, Copy, Default)]
+struct Fme7Channel {
+    period: u16,
+    volume: u8,
+    tone_disabled: bool,
+    timer: u16,
+    phase: bool,
+}
+
+impl Fme7Channel {
+    /// Clocked at CPU/16 per the datasheet's tone divider. The channel flips
+    /// its output whenever the timer hits 0; period 0 is treated as 1.
+    fn clock(&mut self) {
+        if self.timer == 0 {
+            self.timer = self.period.max(1);
+            self.phase = !self.phase;
+        } else {
+            self.timer -= 1;
+        }
+    }
+
+    fn output(&self) -> u8 {
+        if self.tone_disabled {
+            return 0;
+        }
+        if self.phase { self.volume } else { 0 }
+    }
+}
+
 /// Sunsoft FME-7 / Sunsoft 5B (Mapper 69)
-/// Features 8KB PRG banking, 1KB CHR banking, and a 16-bit IRQ timer.
+/// Features 8KB PRG banking, 1KB CHR banking, a 16-bit IRQ timer, and 3
+/// expansion-audio channels via a YM2149-style register file at $C000/$E000.
 pub struct SunsoftFme7Mapper {
     prg_rom: Vec<u8>,
     chr_rom: Vec<u8>,
@@ -23,6 +58,13 @@ pub struct SunsoftFme7Mapper {
     irq_enable: bool,
     irq_counter_enable: bool,
     irq_pending: bool,
+
+    // 5B audio: the 16-entry register file, the last-selected register, the
+    // three tone channels, and a /16 prescaler that drives the tone clock.
+    audio_reg_select: u8,
+    audio_regs: [u8; 16],
+    audio_channels: [Fme7Channel; 3],
+    audio_prescaler: u8,
 }
 
 impl SunsoftFme7Mapper {
@@ -44,6 +86,36 @@ impl SunsoftFme7Mapper {
             irq_enable: false,
             irq_counter_enable: false,
             irq_pending: false,
+            audio_reg_select: 0,
+            audio_regs: [0; 16],
+            audio_channels: [Fme7Channel::default(); 3],
+            audio_prescaler: 0,
+        }
+    }
+
+    fn write_audio_data(&mut self, val: u8) {
+        let reg = (self.audio_reg_select & 0x0F) as usize;
+        self.audio_regs[reg] = val;
+        match reg {
+            0 | 2 | 4 => {
+                let ch = reg / 2;
+                self.audio_channels[ch].period =
+                    (self.audio_channels[ch].period & 0x0F00) | val as u16;
+            }
+            1 | 3 | 5 => {
+                let ch = reg / 2;
+                self.audio_channels[ch].period =
+                    (self.audio_channels[ch].period & 0x00FF) | (((val & 0x0F) as u16) << 8);
+            }
+            7 => {
+                for (i, ch) in self.audio_channels.iter_mut().enumerate() {
+                    ch.tone_disabled = (val >> i) & 1 != 0;
+                }
+            }
+            8 | 9 | 10 => {
+                self.audio_channels[reg - 8].volume = val & 0x0F;
+            }
+            _ => {}
         }
     }
 
@@ -125,6 +197,8 @@ impl Mapper for SunsoftFme7Mapper {
                     _ => {}
                 }
             }
+            0xC000..=0xDFFF => self.audio_reg_select = val & 0x0F,
+            0xE000..=0xFFFF => self.write_audio_data(val),
             _ => {}
         }
     }
@@ -153,6 +227,14 @@ impl Mapper for SunsoftFme7Mapper {
     }
 
     fn tick_cpu(&mut self) {
+        // Tone generators clock at CPU / 16 per the 5B spec.
+        self.audio_prescaler = self.audio_prescaler.wrapping_add(1);
+        if self.audio_prescaler & 0x0F == 0 {
+            for ch in &mut self.audio_channels {
+                ch.clock();
+            }
+        }
+
         if !self.irq_counter_enable {
             return;
         }
@@ -164,6 +246,17 @@ impl Mapper for SunsoftFme7Mapper {
         } else {
             self.irq_counter -= 1;
         }
+    }
+
+    fn expansion_audio_sample(&self) -> f32 {
+        let sum: u32 = self
+            .audio_channels
+            .iter()
+            .map(|c| c.output() as u32)
+            .sum();
+        // Three 4-bit channels → max sum = 45. Scale to ~0.12 peak, matching
+        // the VRC6 mixer amplitude.
+        (sum as f32 / 45.0) * 0.12
     }
 
     fn check_irq(&self) -> bool {
