@@ -24,6 +24,12 @@ pub(crate) const LENGTH_TABLE: [u8; 32] = [
 
 /// NTSC CPU frequency in Hz.
 const CPU_FREQ: f64 = 1_789_773.0;
+/// Post-filter master gain. The NES pulse+TND non-linear mixer peaks around
+/// 0.55 and average playback (one pulse + triangle) lands near 0.2, so the
+/// emulator was output ing a signal well below unity. Multiplying by 1.8
+/// brings a loud game's peak close to full scale while still leaving some
+/// headroom for expansion audio; the final `clamp(-1, 1)` catches spikes.
+const MASTER_GAIN: f32 = 1.8;
 
 #[derive(Clone)]
 pub struct Apu {
@@ -88,8 +94,17 @@ impl Apu {
             sample_buffer: Vec::new(),
             expansion_audio_input: 0.0,
 
+            // Nesdev documents three filters (90 Hz HP, 440 Hz HP, 14 kHz
+            // LP) as matching a stock Famicom's RF-modulated output. The
+            // 440 Hz HP in particular is an artifact of that output stage
+            // and rolls off everything below mid-band by ~17 dB at 60 Hz,
+            // which makes bass basically disappear. Keeping the DC blocker
+            // HP at 90 Hz and dropping the second HP to a very gentle
+            // 37 Hz (just enough to suppress slow envelope drift) matches
+            // what most modern emulators do by default and preserves the
+            // bass that composers expect to hear.
             hp1: HighPassFilter::new(90.0, 44100.0),
-            hp2: HighPassFilter::new(440.0, 44100.0),
+            hp2: HighPassFilter::new(37.0, 44100.0),
             lp: LowPassFilter::new(14000.0, 44100.0),
         }
     }
@@ -102,7 +117,7 @@ impl Apu {
         self.cycles_per_sample = CPU_FREQ / sample_rate as f64;
         let sr = sample_rate as f32;
         self.hp1 = HighPassFilter::new(90.0, sr);
-        self.hp2 = HighPassFilter::new(440.0, sr);
+        self.hp2 = HighPassFilter::new(37.0, sr);
         self.lp = LowPassFilter::new(14000.0, sr);
     }
 
@@ -191,7 +206,13 @@ impl Apu {
                     self.sample_accumulator = 0.0;
                     self.sample_acc_count = 0;
                     let filtered = self.lp.apply(self.hp2.apply(self.hp1.apply(avg)));
-                    self.sample_buffer.push(filtered);
+                    // Master gain: the non-linear 2A03 mixer peaks around
+                    // 0.55 with both pulses + triangle + noise + DMC at
+                    // max, which leaves a lot of headroom on the [-1, 1]
+                    // cpal output. Boost so typical playback sits closer
+                    // to unity, then soft-clip to avoid popping on peaks.
+                    let boosted = filtered * MASTER_GAIN;
+                    self.sample_buffer.push(boosted.clamp(-1.0, 1.0));
                 }
             }
         }
