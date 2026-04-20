@@ -12,7 +12,8 @@ cargo run --release -- <path-to-rom.nes>
 
 ### Controls
 
-One player only.
+Only controller 1 is key-mapped. Controller 2 is wired on the bus (games
+that poll `$4017` read all-zeros) but has no input binding.
 
 | Key        | Action   |
 |------------|----------|
