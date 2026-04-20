@@ -379,9 +379,16 @@ impl Mapper for Vrc6Mapper {
     }
 
     fn expansion_audio_sample(&self) -> f32 {
+        // VRC6 output is linear from the chip, but real Konami carts drive
+        // it through an amplifier stage that makes the three expansion
+        // channels the dominant voices in Akumajou Densetsu / Madara — the
+        // 2A03 sits underneath them, not the other way around. The old
+        // 0.12 scalar left VRC6 quieter than the stock channels, so music
+        // sounded missing the lead synth and bass. Doubled the gain to
+        // push peak amplitude slightly above the 2A03 mixer.
         let pulse_mix = (self.pulse1.output() as f32 + self.pulse2.output() as f32) / 30.0;
         let saw_mix = self.saw.output() as f32 / 31.0;
-        (pulse_mix + saw_mix) * 0.12
+        (pulse_mix + saw_mix) * 0.25
     }
 
     fn check_irq(&self) -> bool {
